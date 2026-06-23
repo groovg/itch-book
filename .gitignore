@@ -1,0 +1,8 @@
+build/
+*.o
+*.exe
+.cache/
+compile_commands.json
+*.NASDAQ_ITCH50*
+*.BX_ITCH_50*
+*.itch
