@@ -1,13 +1,23 @@
 #include <itch/messages.hpp>
+#include <itch/parser.hpp>
 #include <itch/wire.hpp>
 
 #include "check.hpp"
+
+#include <vector>
 
 using namespace itch;
 
 namespace {
 
 std::byte b(unsigned v) { return static_cast<std::byte>(v); }
+
+void frame(std::vector<std::byte>& out, char type, std::size_t body_len) {
+    out.push_back(b(static_cast<unsigned>(body_len >> 8)));
+    out.push_back(b(static_cast<unsigned>(body_len & 0xff)));
+    out.push_back(b(static_cast<unsigned>(type)));
+    for (std::size_t i = 1; i < body_len; ++i) out.push_back(b(0));
+}
 
 void wire_loads() {
     const std::byte two[] = {b(0x12), b(0x34)};
@@ -69,11 +79,71 @@ void length_table() {
     CHECK(wire_length('\0') == 0);
 }
 
+void scan_frames() {
+    std::vector<std::byte> buf;
+    frame(buf, 'S', 12);
+    frame(buf, 'R', 39);
+    frame(buf, 'A', 36);
+    auto r = scan(buf);
+    CHECK(r.messages == 3);
+    CHECK(r.unknown == 0);
+    CHECK(r.malformed == 0);
+    CHECK(r.consumed == buf.size());
+    CHECK(!r.end_of_session);
+}
+
+void scan_end_of_session() {
+    std::vector<std::byte> buf;
+    frame(buf, 'S', 12);
+    buf.push_back(b(0));
+    buf.push_back(b(0));
+    frame(buf, 'A', 36);
+    auto r = scan(buf);
+    CHECK(r.messages == 1);
+    CHECK(r.end_of_session);
+    CHECK(r.consumed == 14 + 2);
+}
+
+void scan_truncated_tail() {
+    std::vector<std::byte> buf;
+    frame(buf, 'D', 19);
+    frame(buf, 'A', 36);
+    const std::size_t full = buf.size();
+    for (std::size_t cut = 1; cut < 38; ++cut) {
+        auto r = scan(std::span(buf.data(), full - cut));
+        CHECK(r.messages == 1);
+        CHECK(r.consumed == 21);
+        CHECK(!r.end_of_session);
+    }
+    auto r1 = scan(std::span(buf.data(), std::size_t{1}));
+    CHECK(r1.messages == 0);
+    CHECK(r1.consumed == 0);
+    auto r0 = scan(std::span(buf.data(), std::size_t{0}));
+    CHECK(r0.messages == 0);
+    CHECK(r0.consumed == 0);
+}
+
+void scan_unknown_and_malformed() {
+    std::vector<std::byte> buf;
+    frame(buf, 'z', 17);
+    frame(buf, 'A', 20);
+    frame(buf, 'D', 19);
+    auto r = scan(buf);
+    CHECK(r.messages == 1);
+    CHECK(r.unknown == 1);
+    CHECK(r.malformed == 1);
+    CHECK(r.consumed == buf.size());
+}
+
 }  // namespace
 
 int main() {
     wire_loads();
     wire_alpha();
     length_table();
+    scan_frames();
+    scan_end_of_session();
+    scan_truncated_tail();
+    scan_unknown_and_malformed();
     RUN_END();
 }
