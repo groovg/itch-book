@@ -3,7 +3,9 @@
 #include <itch/wire.hpp>
 
 #include "check.hpp"
+#include "encode.hpp"
 
+#include <optional>
 #include <vector>
 
 using namespace itch;
@@ -135,6 +137,115 @@ void scan_unknown_and_malformed() {
     CHECK(r.consumed == buf.size());
 }
 
+struct Recorder {
+    std::optional<SystemEvent> sys;
+    std::optional<StockDirectory> dir;
+    std::vector<AddOrder> adds;
+    std::optional<OrderExecuted> exec;
+    std::optional<OrderExecutedPrice> exec_px;
+    std::optional<OrderCancel> cancel;
+    std::optional<OrderDelete> del;
+    std::optional<OrderReplace> replace;
+    std::optional<Trade> trade;
+
+    void on_system_event(const SystemEvent& m) { sys = m; }
+    void on_stock_directory(const StockDirectory& m) { dir = m; }
+    void on_add(const AddOrder& m) { adds.push_back(m); }
+    void on_execute(const OrderExecuted& m) { exec = m; }
+    void on_execute_price(const OrderExecutedPrice& m) { exec_px = m; }
+    void on_cancel(const OrderCancel& m) { cancel = m; }
+    void on_delete(const OrderDelete& m) { del = m; }
+    void on_replace(const OrderReplace& m) { replace = m; }
+    void on_trade(const Trade& m) { trade = m; }
+};
+
+void decode_all_types() {
+    std::vector<std::byte> buf;
+    enc::system_event(buf, 34200'000'000'000ull, 'Q');
+    enc::stock_directory(buf, 42, 34200'000'000'001ull, "AAPL", 100);
+    enc::add_order(buf, 42, 34200'000'000'002ull, 1001, 'B', 300, "AAPL", 1'857'400);
+    enc::add_order_mpid(buf, 42, 34200'000'000'003ull, 1002, 'S', 200, "AAPL", 1'857'900,
+                        "JPMC");
+    enc::order_executed(buf, 42, 34200'000'000'004ull, 1001, 100, 555001);
+    enc::order_executed_price(buf, 42, 34200'000'000'005ull, 1001, 50, 555002, false,
+                              1'857'500);
+    enc::order_cancel(buf, 42, 34200'000'000'006ull, 1002, 25);
+    enc::order_delete(buf, 42, 34200'000'000'007ull, 1002);
+    enc::order_replace(buf, 42, 34200'000'000'008ull, 1001, 1003, 400, 1'856'000);
+    enc::trade(buf, 42, 34200'000'000'009ull, 75, "AAPL", 1'857'200, 555003);
+    enc::end_of_session(buf);
+
+    Recorder h;
+    auto r = parse(buf, h);
+    CHECK(r.messages == 10);
+    CHECK(r.unknown == 0);
+    CHECK(r.malformed == 0);
+    CHECK(r.end_of_session);
+    CHECK(r.consumed == buf.size());
+
+    CHECK(h.sys && h.sys->event == 'Q');
+    CHECK(h.sys->hdr.locate == 0);
+    CHECK(h.sys->hdr.timestamp == 34200'000'000'000ull);
+
+    CHECK(h.dir && h.dir->stock.view() == "AAPL");
+    CHECK(h.dir->round_lot_size == 100);
+    CHECK(h.dir->market_category == 'Q');
+    CHECK(h.dir->authenticity == 'P');
+    CHECK(h.dir->luld_tier == '1');
+
+    CHECK(h.adds.size() == 2);
+    CHECK(h.adds[0].ref == 1001);
+    CHECK(h.adds[0].side == Side::Buy);
+    CHECK(h.adds[0].shares == 300);
+    CHECK(h.adds[0].stock.view() == "AAPL");
+    CHECK(h.adds[0].price.raw() == 1'857'400);
+    CHECK(!h.adds[0].attributed);
+    CHECK(h.adds[0].mpid.view().empty());
+    CHECK(h.adds[1].ref == 1002);
+    CHECK(h.adds[1].side == Side::Sell);
+    CHECK(h.adds[1].attributed);
+    CHECK(h.adds[1].mpid.view() == "JPMC");
+
+    CHECK(h.exec && h.exec->ref == 1001);
+    CHECK(h.exec->shares == 100);
+    CHECK(h.exec->match == 555001);
+
+    CHECK(h.exec_px && h.exec_px->ref == 1001);
+    CHECK(h.exec_px->shares == 50);
+    CHECK(!h.exec_px->printable);
+    CHECK(h.exec_px->price.raw() == 1'857'500);
+
+    CHECK(h.cancel && h.cancel->ref == 1002);
+    CHECK(h.cancel->shares == 25);
+
+    CHECK(h.del && h.del->ref == 1002);
+
+    CHECK(h.replace && h.replace->old_ref == 1001);
+    CHECK(h.replace->new_ref == 1003);
+    CHECK(h.replace->shares == 400);
+    CHECK(h.replace->price.raw() == 1'856'000);
+
+    CHECK(h.trade && h.trade->shares == 75);
+    CHECK(h.trade->stock.view() == "AAPL");
+    CHECK(h.trade->price.raw() == 1'857'200);
+    CHECK(h.trade->match == 555003);
+    CHECK(h.trade->hdr.locate == 42);
+}
+
+void partial_handler_compiles() {
+    std::vector<std::byte> buf;
+    enc::add_order(buf, 7, 1, 5001, 'B', 10, "MSFT", 4'210'000);
+    enc::order_delete(buf, 7, 2, 5001);
+
+    struct AddsOnly {
+        int adds = 0;
+        void on_add(const AddOrder&) { ++adds; }
+    } h;
+    auto r = parse(buf, h);
+    CHECK(r.messages == 2);
+    CHECK(h.adds == 1);
+}
+
 }  // namespace
 
 int main() {
@@ -145,5 +256,7 @@ int main() {
     scan_end_of_session();
     scan_truncated_tail();
     scan_unknown_and_malformed();
+    decode_all_types();
+    partial_handler_compiles();
     RUN_END();
 }
