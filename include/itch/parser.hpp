@@ -63,6 +63,7 @@ inline void dispatch(char type, const std::byte* m, H& h) {
                 h.on_trade(Trade::decode(m));
             break;
         default:
+            if constexpr (requires { h.on_other(type); }) h.on_other(type);
             break;
     }
 }
