@@ -20,6 +20,11 @@ if(PROJECT_IS_TOP_LEVEL)
   target_compile_options(parse_test PRIVATE -Wall -Wextra -Werror)
   add_test(NAME parse COMMAND parse_test)
 
+  add_executable(book_test test/book_test.cpp)
+  target_link_libraries(book_test PRIVATE itch_book)
+  target_compile_options(book_test PRIVATE -Wall -Wextra -Werror)
+  add_test(NAME book COMMAND book_test)
+
   add_executable(itch-replay src/replay.cpp)
   target_link_libraries(itch-replay PRIVATE itch_book)
   target_compile_options(itch-replay PRIVATE -Wall -Wextra -Werror)
