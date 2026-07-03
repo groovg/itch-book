@@ -158,6 +158,82 @@ void page_reclamation() {
     CHECK(b.validate(os));
 }
 
+void replace_moves_level() {
+    OrderStore os;
+    Book b;
+    Order& o = add(os, b, 81, true, 100, 1'000'000);
+    add(os, b, 82, true, 40, 1'000'000);
+
+    Order* n = b.replace(os, 81, o, 83, 60, 1'002'000);
+    CHECK(n != nullptr);
+    CHECK(os.find(81) == nullptr);
+    CHECK(os.find(83) != nullptr);
+    CHECK(n->buy == 1);
+    Top t{};
+    CHECK(b.top(true, t) && t.price.raw() == 1'002'000 && t.shares == 60);
+    CHECK(b.side(true).size() == 2);
+    CHECK(b.validate(os));
+}
+
+void replace_same_price_requeues() {
+    OrderStore os;
+    Book b;
+    Order& first = add(os, b, 91, false, 10, 2'000'000);
+    add(os, b, 92, false, 20, 2'000'000);
+
+    CHECK(b.replace(os, 91, first, 99, 15, 2'000'000) != nullptr);
+    auto refs = chain(os, b, false);
+    CHECK(refs == (std::vector<std::uint64_t>{92, 99}));
+    Top t{};
+    CHECK(b.top(false, t) && t.shares == 35 && t.orders == 2);
+    CHECK(b.validate(os));
+}
+
+void replace_after_partial_execute() {
+    OrderStore os;
+    Book b;
+    Order& o = add(os, b, 101, true, 100, 3'000'000);
+    CHECK(b.reduce(os, 101, o, 70) == 70);
+    CHECK(os.find(101) != nullptr);
+
+    CHECK(b.replace(os, 101, o, 102, 500, 3'000'000) != nullptr);
+    Top t{};
+    CHECK(b.top(true, t) && t.shares == 500 && t.orders == 1);
+    CHECK(b.validate(os));
+}
+
+void chained_replace() {
+    OrderStore os;
+    Book b;
+    Order& a = add(os, b, 111, false, 10, 4'000'000);
+    Order* second = b.replace(os, 111, a, 112, 20, 4'100'000);
+    CHECK(second != nullptr);
+    Order* third = b.replace(os, 112, *second, 113, 30, 4'200'000);
+    CHECK(third != nullptr);
+
+    CHECK(os.find(111) == nullptr);
+    CHECK(os.find(112) == nullptr);
+    CHECK(os.find(113) != nullptr);
+    CHECK(third->buy == 0);
+    Top t{};
+    CHECK(b.top(false, t) && t.price.raw() == 4'200'000 && t.shares == 30);
+    CHECK(b.side(false).size() == 1);
+    CHECK(b.validate(os));
+}
+
+void replace_duplicate_new_ref() {
+    OrderStore os;
+    Book b;
+    Order& a = add(os, b, 121, true, 10, 5'000'000);
+    add(os, b, 122, true, 20, 5'100'000);
+
+    CHECK(b.replace(os, 121, a, 122, 30, 5'200'000) == nullptr);
+    CHECK(os.find(121) == nullptr);
+    Top t{};
+    CHECK(b.top(true, t) && t.price.raw() == 5'100'000 && t.shares == 20);
+    CHECK(b.validate(os));
+}
+
 void crossed_detection() {
     OrderStore os;
     Book b;
@@ -178,6 +254,11 @@ int main() {
     unlink_middle();
     level_erase_away_from_touch();
     page_reclamation();
+    replace_moves_level();
+    replace_same_price_requeues();
+    replace_after_partial_execute();
+    chained_replace();
+    replace_duplicate_new_ref();
     crossed_detection();
     RUN_END();
 }

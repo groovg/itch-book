@@ -77,6 +77,18 @@ class Book {
         os.note_dead(ref);
     }
 
+    Order* replace(OrderStore& os, std::uint64_t old_ref, Order& old_o, std::uint64_t new_ref,
+                   std::uint32_t shares, std::int64_t price_raw) {
+        const std::uint8_t buy = old_o.buy;
+        remove(os, old_ref, old_o);
+        Order& o = os.touch(new_ref);
+        if (o.level != kNil) return nullptr;
+        o.qty = shares;
+        o.buy = buy;
+        add(os, new_ref, o, price_raw);
+        return &o;
+    }
+
     bool top(bool buy, Top& out) const {
         const auto& s = buy ? bids_ : asks_;
         if (s.empty()) return false;
