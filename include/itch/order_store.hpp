@@ -17,6 +17,7 @@ struct Order {
     std::uint64_t next;
     std::uint32_t qty;
     Handle level = kNil;
+    std::uint16_t locate;
     std::uint8_t buy;
 };
 
@@ -67,6 +68,13 @@ class OrderStore {
     }
 
     std::size_t spare_pages() const { return spare_.size(); }
+
+    std::uint64_t live_orders() const {
+        std::uint64_t n = 0;
+        for (const auto& p : pages_)
+            if (p) n += p->live;
+        return n;
+    }
 
   private:
     std::unique_ptr<Page> take_page() {
