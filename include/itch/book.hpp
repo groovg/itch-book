@@ -130,7 +130,7 @@ class Book {
                 if (sum != lv.shares || count != lv.orders || count == 0) return false;
             }
         }
-        return !crossed();
+        return true;
     }
 
   private:

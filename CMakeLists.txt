@@ -25,6 +25,16 @@ if(PROJECT_IS_TOP_LEVEL)
   target_compile_options(book_test PRIVATE -Wall -Wextra -Werror)
   add_test(NAME book COMMAND book_test)
 
+  add_executable(differential_test test/differential_test.cpp)
+  target_link_libraries(differential_test PRIVATE itch_book)
+  target_compile_options(differential_test PRIVATE -Wall -Wextra -Werror)
+  add_test(NAME differential COMMAND differential_test)
+
+  add_executable(gen-synthetic tools/gen_synthetic.cpp)
+  target_link_libraries(gen-synthetic PRIVATE itch_book)
+  target_include_directories(gen-synthetic PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/test)
+  target_compile_options(gen-synthetic PRIVATE -Wall -Wextra -Werror)
+
   add_executable(itch-replay src/replay.cpp)
   target_link_libraries(itch-replay PRIVATE itch_book)
   target_compile_options(itch-replay PRIVATE -Wall -Wextra -Werror)

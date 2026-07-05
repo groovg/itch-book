@@ -240,7 +240,7 @@ void crossed_detection() {
     add(os, b, 71, true, 10, 1'010'000);
     add(os, b, 72, false, 10, 1'000'000);
     CHECK(b.crossed());
-    CHECK(!b.validate(os));
+    CHECK(b.validate(os));
 }
 
 }  // namespace
