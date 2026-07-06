@@ -43,15 +43,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: sudo apt-get update && sudo apt-get install -y libc++-dev libc++abi-dev
-      - run: >
-          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=clang++
-          -DCMAKE_CXX_FLAGS="-stdlib=libc++"
+      - run: wget -qO- https://apt.llvm.org/llvm.sh | sudo bash -s -- 19
+      - run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
       - run: cmake --build build --target gen-synthetic
       - run: >
-          clang++ -std=c++23 -stdlib=libc++ -O1 -g -fsanitize=fuzzer,address,undefined
+          clang++-19 -std=c++23 -O1 -g -fsanitize=fuzzer,address,undefined
           -Iinclude -Ibuild/_deps/fixed_decimal-src/cpp/include
-          fuzz/fuzz_parse.cpp -o fuzz_parse -lstdc++
+          fuzz/fuzz_parse.cpp -o fuzz_parse
       - run: |
           mkdir corpus
           ./build/gen-synthetic corpus/seed.itch 2000 10 7
