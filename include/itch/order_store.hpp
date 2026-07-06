@@ -71,6 +71,12 @@ class OrderStore {
 
     std::size_t spare_pages() const { return spare_.size(); }
 
+    void reserve(std::uint64_t ref_space, std::uint64_t, std::size_t spare_hint) {
+        pages_.reserve((ref_space >> kPageBits) + 1);
+        spare_.reserve(spare_hint);
+        while (spare_.size() < spare_hint) spare_.push_back(std::make_unique<Page>());
+    }
+
     std::uint64_t live_orders() const {
         std::uint64_t n = 0;
         for (const auto& p : pages_)
@@ -149,6 +155,14 @@ class PooledOrderStore {
         free_.push_back(h);
         h = kNil;
         if (--p->live == 0) spare_.push_back(std::move(p));
+    }
+
+    void reserve(std::uint64_t ref_space, std::uint64_t max_live, std::size_t spare_hint) {
+        pages_.reserve((ref_space >> kPageBits) + 1);
+        pool_.reserve(max_live);
+        free_.reserve(max_live);
+        spare_.reserve(spare_hint);
+        while (spare_.size() < spare_hint) spare_.push_back(std::make_unique<Page>());
     }
 
     std::uint64_t live_orders() const { return pool_.size() - free_.size(); }

@@ -134,6 +134,11 @@ class BookManager {
         return r;
     }
 
+    void reserve(std::uint16_t max_locate, std::size_t levels_per_book) {
+        ensure(max_locate);
+        for (BookT& b : books_) b.reserve(levels_per_book);
+    }
+
     std::size_t book_count() const { return books_.size(); }
     const Stats& stats() const { return stats_; }
     const Store& orders() const { return os_; }

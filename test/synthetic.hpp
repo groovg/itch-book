@@ -74,7 +74,7 @@ class Generator {
         const bool buy = rng_.below(2) == 0;
         const std::uint32_t price = jitter(mids_[locate]);
         const std::uint32_t qty = 1 + rng_.below(2000);
-        next_ref_ += 1 + (rng_.below(8) == 0 ? rng_.below(5000) : 0);
+        next_ref_ += 1 + (rng_.below(16) == 0 ? rng_.below(64) : 0);
         const std::uint64_t ref = next_ref_;
         if (rng_.below(10) == 0)
             enc::add_order_mpid(out, locate, ++ts_, ref, buy ? 'B' : 'S', qty,

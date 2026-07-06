@@ -25,6 +25,11 @@ if(PROJECT_IS_TOP_LEVEL)
   target_compile_options(book_test PRIVATE -Wall -Wextra -Werror)
   add_test(NAME book COMMAND book_test)
 
+  add_executable(steady_state_test test/steady_state_test.cpp)
+  target_link_libraries(steady_state_test PRIVATE itch_book)
+  target_compile_options(steady_state_test PRIVATE -Wall -Wextra -Werror)
+  add_test(NAME steady_state COMMAND steady_state_test)
+
   add_executable(differential_test test/differential_test.cpp)
   target_link_libraries(differential_test PRIVATE itch_book)
   target_compile_options(differential_test PRIVATE -Wall -Wextra -Werror)

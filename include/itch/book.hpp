@@ -92,6 +92,13 @@ class Book {
         return &o;
     }
 
+    void reserve(std::size_t levels_hint) {
+        levels_.reserve(levels_hint);
+        free_.reserve(levels_hint);
+        bids_.reserve(levels_hint / 2 + 1);
+        asks_.reserve(levels_hint / 2 + 1);
+    }
+
     bool top(bool buy, Top& out) const {
         const auto& s = buy ? bids_ : asks_;
         if (s.empty()) return false;
