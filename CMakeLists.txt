@@ -47,6 +47,17 @@ if(PROJECT_IS_TOP_LEVEL)
     target_link_libraries(book_throughput PRIVATE psapi)
   endif()
 
+  option(ITCH_BENCH_LATENCY "Build the apply-latency bench (fetches tsc-latency, x86 only)" OFF)
+  if(ITCH_BENCH_LATENCY)
+    FetchContent_Declare(tsc_latency
+      GIT_REPOSITORY https://github.com/groovg/tsc-latency
+      GIT_TAG 8b432562323a9c2c5f9f54064d7c1127139daa4c)
+    FetchContent_MakeAvailable(tsc_latency)
+    add_executable(apply_latency bench/apply_latency.cpp)
+    target_link_libraries(apply_latency PRIVATE itch_book tsclat)
+    target_compile_options(apply_latency PRIVATE -Wall -Wextra -Werror)
+  endif()
+
   add_executable(itch-replay src/replay.cpp)
   target_link_libraries(itch-replay PRIVATE itch_book)
   target_compile_options(itch-replay PRIVATE -Wall -Wextra -Werror)
