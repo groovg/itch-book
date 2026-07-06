@@ -20,7 +20,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=clang++
+      - run: sudo apt-get update && sudo apt-get install -y libc++-dev libc++abi-dev
+      - run: >
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=clang++
+          -DCMAKE_CXX_FLAGS="-stdlib=libc++"
       - run: cmake --build build
       - run: ctest --test-dir build --output-on-failure
 
@@ -40,10 +43,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=clang++
+      - run: sudo apt-get update && sudo apt-get install -y libc++-dev libc++abi-dev
+      - run: >
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=clang++
+          -DCMAKE_CXX_FLAGS="-stdlib=libc++"
       - run: cmake --build build --target gen-synthetic
       - run: >
-          clang++ -std=c++23 -O1 -g -fsanitize=fuzzer,address,undefined
+          clang++ -std=c++23 -stdlib=libc++ -O1 -g -fsanitize=fuzzer,address,undefined
           -Iinclude -Ibuild/_deps/fixed_decimal-src/cpp/include
           fuzz/fuzz_parse.cpp -o fuzz_parse
       - run: |
