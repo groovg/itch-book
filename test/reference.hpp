@@ -5,6 +5,7 @@
 #include <unordered_map>
 
 #include <itch/messages.hpp>
+#include <itch/order_store.hpp>
 
 namespace refimpl {
 
@@ -28,7 +29,7 @@ struct RefBook {
 class Reference {
   public:
     void on_add(const itch::AddOrder& m) {
-        if (m.shares == 0 || m.price.raw() <= 0 || m.ref == 0) return;
+        if (m.shares == 0 || m.price.raw() <= 0 || m.ref == 0 || m.ref >= itch::kMaxRef) return;
         auto it = orders_.find(m.ref);
         if (it != orders_.end()) remove_order(it);
         insert(m.ref, {m.hdr.locate, m.side == itch::Side::Buy, m.price.raw(), m.shares});
@@ -48,7 +49,9 @@ class Reference {
         if (it == orders_.end()) return;
         const RefOrder old = it->second;
         remove_order(it);
-        if (m.shares == 0 || m.price.raw() <= 0 || m.new_ref == 0) return;
+        if (m.shares == 0 || m.price.raw() <= 0 || m.new_ref == 0 ||
+            m.new_ref >= itch::kMaxRef)
+            return;
         if (orders_.find(m.new_ref) != orders_.end()) return;
         insert(m.new_ref, {old.locate, old.buy, m.price.raw(), m.shares});
     }

@@ -12,6 +12,7 @@ namespace itch {
 using Handle = std::uint32_t;
 inline constexpr Handle kNil = 0xffffffffu;
 inline constexpr std::uint64_t kNilRef = 0;
+inline constexpr std::uint64_t kMaxRef = std::uint64_t{1} << 36;
 
 struct Order {
     std::uint64_t prev;
@@ -23,7 +24,7 @@ struct Order {
 };
 
 class OrderStore {
-    static constexpr unsigned kPageBits = 16;
+    static constexpr unsigned kPageBits = 13;
     static constexpr std::size_t kPageSize = std::size_t{1} << kPageBits;
     static constexpr std::uint64_t kPageMask = kPageSize - 1;
 
@@ -98,7 +99,7 @@ class OrderStore {
 };
 
 class PooledOrderStore {
-    static constexpr unsigned kPageBits = 16;
+    static constexpr unsigned kPageBits = 13;
     static constexpr std::size_t kPageSize = std::size_t{1} << kPageBits;
     static constexpr std::uint64_t kPageMask = kPageSize - 1;
 

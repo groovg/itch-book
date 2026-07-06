@@ -1,11 +1,14 @@
+#include <itch/book_manager.hpp>
 #include <itch/messages.hpp>
 #include <itch/parser.hpp>
 #include <itch/wire.hpp>
 
 #include "check.hpp"
 #include "encode.hpp"
+#include "synthetic.hpp"
 
 #include <optional>
+#include <span>
 #include <vector>
 
 using namespace itch;
@@ -232,6 +235,26 @@ void decode_all_types() {
     CHECK(h.trade->hdr.locate == 42);
 }
 
+void mutation_robustness() {
+    std::vector<std::byte> pristine;
+    synth::Generator g(7, 5);
+    g.preamble(pristine);
+    for (int i = 0; i < 2000; ++i) g.step(pristine);
+    g.finish(pristine);
+
+    synth::Rng rng{99};
+    for (int round = 0; round < 200; ++round) {
+        std::vector<std::byte> buf = pristine;
+        for (int hits = 0; hits < 40; ++hits)
+            buf[rng.below(static_cast<std::uint32_t>(buf.size()))] =
+                static_cast<std::byte>(rng.below(256));
+        const std::size_t cut = rng.below(static_cast<std::uint32_t>(buf.size()) + 1);
+        BookManager<> mgr;
+        const auto r = parse(std::span(buf.data(), cut), mgr);
+        CHECK(r.consumed <= cut);
+    }
+}
+
 void partial_handler_compiles() {
     std::vector<std::byte> buf;
     enc::add_order(buf, 7, 1, 5001, 'B', 10, "MSFT", 4'210'000);
@@ -257,6 +280,7 @@ int main() {
     scan_truncated_tail();
     scan_unknown_and_malformed();
     decode_all_types();
+    mutation_robustness();
     partial_handler_compiles();
     RUN_END();
 }

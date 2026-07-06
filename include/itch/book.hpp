@@ -24,7 +24,7 @@ struct Top {
     std::uint32_t orders;
 };
 
-template <typename Store = OrderStore>
+template <typename Store = PooledOrderStore>
 class Book {
   public:
     using StoreType = Store;

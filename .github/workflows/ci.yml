@@ -14,3 +14,39 @@ jobs:
       - run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
       - run: cmake --build build
       - run: ctest --test-dir build --output-on-failure
+
+  clang:
+    name: Clang
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=clang++
+      - run: cmake --build build
+      - run: ctest --test-dir build --output-on-failure
+
+  sanitizers:
+    name: ASan + UBSan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: >
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
+          -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-sanitize-recover=all -O1 -g"
+      - run: cmake --build build
+      - run: ctest --test-dir build --output-on-failure
+
+  fuzz:
+    name: Fuzz (libFuzzer)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=clang++
+      - run: cmake --build build --target gen-synthetic
+      - run: >
+          clang++ -std=c++23 -O1 -g -fsanitize=fuzzer,address,undefined
+          -Iinclude -Ibuild/_deps/fixed_decimal-src/cpp/include
+          fuzz/fuzz_parse.cpp -o fuzz_parse
+      - run: |
+          mkdir corpus
+          ./build/gen-synthetic corpus/seed.itch 2000 10 7
+      - run: ./fuzz_parse -max_total_time=60 -max_len=65536 corpus/

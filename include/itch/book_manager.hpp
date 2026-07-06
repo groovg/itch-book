@@ -54,7 +54,7 @@ class BookManager {
     }
 
     void on_add(const AddOrder& m) {
-        if (m.shares == 0 || m.price.raw() <= 0 || m.ref == kNilRef) {
+        if (m.shares == 0 || m.price.raw() <= 0 || m.ref == kNilRef || m.ref >= kMaxRef) {
             ++stats_.rejected;
             return;
         }
@@ -101,7 +101,8 @@ class BookManager {
         }
         const std::uint16_t loc = o->locate;
         BookT& b = books_[loc];
-        if (m.shares == 0 || m.price.raw() <= 0 || m.new_ref == kNilRef) {
+        if (m.shares == 0 || m.price.raw() <= 0 || m.new_ref == kNilRef ||
+            m.new_ref >= kMaxRef) {
             b.remove(os_, m.old_ref, *o);
             ++stats_.rejected;
         } else {
