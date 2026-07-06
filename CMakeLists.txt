@@ -35,6 +35,18 @@ if(PROJECT_IS_TOP_LEVEL)
   target_include_directories(gen-synthetic PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/test)
   target_compile_options(gen-synthetic PRIVATE -Wall -Wextra -Werror)
 
+  add_executable(parse_throughput bench/parse_throughput.cpp)
+  target_link_libraries(parse_throughput PRIVATE itch_book)
+  target_compile_options(parse_throughput PRIVATE -Wall -Wextra -Werror)
+
+  add_executable(book_throughput bench/book_throughput.cpp)
+  target_link_libraries(book_throughput PRIVATE itch_book)
+  target_include_directories(book_throughput PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/test)
+  target_compile_options(book_throughput PRIVATE -Wall -Wextra -Werror)
+  if(WIN32)
+    target_link_libraries(book_throughput PRIVATE psapi)
+  endif()
+
   add_executable(itch-replay src/replay.cpp)
   target_link_libraries(itch-replay PRIVATE itch_book)
   target_compile_options(itch-replay PRIVATE -Wall -Wextra -Werror)
