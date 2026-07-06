@@ -10,7 +10,7 @@ using namespace itch;
 
 namespace {
 
-Order& add(OrderStore& os, Book& b, std::uint64_t ref, bool buy, std::uint32_t qty,
+Order& add(OrderStore& os, Book<>& b, std::uint64_t ref, bool buy, std::uint32_t qty,
            std::int64_t px) {
     Order& o = os.touch(ref);
     o.qty = qty;
@@ -19,7 +19,7 @@ Order& add(OrderStore& os, Book& b, std::uint64_t ref, bool buy, std::uint32_t q
     return o;
 }
 
-std::vector<std::uint64_t> chain(const OrderStore& os, const Book& b, bool buy) {
+std::vector<std::uint64_t> chain(const OrderStore& os, const Book<>& b, bool buy) {
     std::vector<std::uint64_t> refs;
     const auto& s = b.side(buy);
     const Level& lv = b.level(s.back().level);
@@ -29,7 +29,7 @@ std::vector<std::uint64_t> chain(const OrderStore& os, const Book& b, bool buy) 
 
 void empty_book() {
     OrderStore os;
-    Book b;
+    Book<> b;
     Top t{};
     CHECK(!b.top(true, t));
     CHECK(!b.top(false, t));
@@ -39,7 +39,7 @@ void empty_book() {
 
 void price_ordering() {
     OrderStore os;
-    Book b;
+    Book<> b;
     add(os, b, 1, true, 100, 1'000'000);
     add(os, b, 2, true, 200, 1'001'000);
     add(os, b, 3, true, 300, 999'000);
@@ -60,7 +60,7 @@ void price_ordering() {
 
 void fifo_aggregation() {
     OrderStore os;
-    Book b;
+    Book<> b;
     add(os, b, 11, true, 100, 500'000);
     add(os, b, 12, true, 50, 500'000);
     add(os, b, 13, true, 25, 500'000);
@@ -75,7 +75,7 @@ void fifo_aggregation() {
 
 void partial_reduce() {
     OrderStore os;
-    Book b;
+    Book<> b;
     Order& o = add(os, b, 21, false, 100, 750'000);
     CHECK(b.reduce(os, 21, o, 40) == 40);
     Top t{};
@@ -91,7 +91,7 @@ void partial_reduce() {
 
 void reduce_clamps() {
     OrderStore os;
-    Book b;
+    Book<> b;
     Order& o = add(os, b, 31, true, 30, 600'000);
     CHECK(b.reduce(os, 31, o, 100) == 30);
     CHECK(os.find(31) == nullptr);
@@ -102,7 +102,7 @@ void reduce_clamps() {
 
 void unlink_middle() {
     OrderStore os;
-    Book b;
+    Book<> b;
     add(os, b, 41, true, 10, 800'000);
     Order& mid = add(os, b, 42, true, 20, 800'000);
     add(os, b, 43, true, 30, 800'000);
@@ -123,7 +123,7 @@ void unlink_middle() {
 
 void level_erase_away_from_touch() {
     OrderStore os;
-    Book b;
+    Book<> b;
     add(os, b, 51, false, 10, 900'000);
     Order& deep = add(os, b, 52, false, 20, 990'000);
     add(os, b, 53, false, 30, 950'000);
@@ -138,7 +138,7 @@ void level_erase_away_from_touch() {
 
 void page_reclamation() {
     OrderStore os;
-    Book b;
+    Book<> b;
     Order& a = add(os, b, 61, true, 10, 400'000);
     Order& c = add(os, b, 62, false, 20, 410'000);
     CHECK(os.resident_pages() == 1);
@@ -160,7 +160,7 @@ void page_reclamation() {
 
 void replace_moves_level() {
     OrderStore os;
-    Book b;
+    Book<> b;
     Order& o = add(os, b, 81, true, 100, 1'000'000);
     add(os, b, 82, true, 40, 1'000'000);
 
@@ -177,7 +177,7 @@ void replace_moves_level() {
 
 void replace_same_price_requeues() {
     OrderStore os;
-    Book b;
+    Book<> b;
     Order& first = add(os, b, 91, false, 10, 2'000'000);
     add(os, b, 92, false, 20, 2'000'000);
 
@@ -191,7 +191,7 @@ void replace_same_price_requeues() {
 
 void replace_after_partial_execute() {
     OrderStore os;
-    Book b;
+    Book<> b;
     Order& o = add(os, b, 101, true, 100, 3'000'000);
     CHECK(b.reduce(os, 101, o, 70) == 70);
     CHECK(os.find(101) != nullptr);
@@ -204,7 +204,7 @@ void replace_after_partial_execute() {
 
 void chained_replace() {
     OrderStore os;
-    Book b;
+    Book<> b;
     Order& a = add(os, b, 111, false, 10, 4'000'000);
     Order* second = b.replace(os, 111, a, 112, 20, 4'100'000);
     CHECK(second != nullptr);
@@ -223,7 +223,7 @@ void chained_replace() {
 
 void replace_duplicate_new_ref() {
     OrderStore os;
-    Book b;
+    Book<> b;
     Order& a = add(os, b, 121, true, 10, 5'000'000);
     add(os, b, 122, true, 20, 5'100'000);
 
@@ -236,7 +236,7 @@ void replace_duplicate_new_ref() {
 
 void crossed_detection() {
     OrderStore os;
-    Book b;
+    Book<> b;
     add(os, b, 71, true, 10, 1'010'000);
     add(os, b, 72, false, 10, 1'000'000);
     CHECK(b.crossed());

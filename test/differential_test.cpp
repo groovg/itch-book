@@ -11,8 +11,9 @@
 
 namespace {
 
-bool side_matches(const std::map<std::int64_t, refimpl::RefLevel>& ref_side,
-                  const itch::Book& b, bool buy) {
+template <typename BookT>
+bool side_matches(const std::map<std::int64_t, refimpl::RefLevel>& ref_side, const BookT& b,
+                  bool buy) {
     const auto& s = b.side(buy);
     if (s.size() != ref_side.size()) return false;
     std::size_t i = 0;
@@ -35,7 +36,8 @@ bool side_matches(const std::map<std::int64_t, refimpl::RefLevel>& ref_side,
     return true;
 }
 
-bool books_match(const refimpl::Reference& ref, const itch::BookManager<>& mgr) {
+template <typename Mgr>
+bool books_match(const refimpl::Reference& ref, const Mgr& mgr) {
     if (mgr.orders().live_orders() != ref.live()) {
         std::fprintf(stderr, "live mismatch: fast %llu ref %zu\n",
                      static_cast<unsigned long long>(mgr.orders().live_orders()), ref.live());
@@ -49,7 +51,7 @@ bool books_match(const refimpl::Reference& ref, const itch::BookManager<>& mgr) 
     for (std::size_t loc = 0; loc < max_locate; ++loc) {
         const auto it = ref.books().find(static_cast<std::uint16_t>(loc));
         const refimpl::RefBook& rb = it == ref.books().end() ? empty : it->second;
-        const itch::Book* fb = mgr.book(static_cast<std::uint16_t>(loc));
+        const auto* fb = mgr.book(static_cast<std::uint16_t>(loc));
         if (!fb) {
             if (!rb.bids.empty() || !rb.asks.empty()) {
                 std::fprintf(stderr, "locate %zu: missing fast book\n", loc);
@@ -69,10 +71,11 @@ bool books_match(const refimpl::Reference& ref, const itch::BookManager<>& mgr) 
     return true;
 }
 
+template <typename Mgr>
 void run_seed(std::uint64_t seed) {
     synth::Generator g(seed, 25);
     refimpl::Reference ref;
-    itch::BookManager<> mgr;
+    Mgr mgr;
     std::vector<std::byte> chunk;
 
     g.preamble(chunk);
@@ -95,8 +98,13 @@ void run_seed(std::uint64_t seed) {
 }  // namespace
 
 int main() {
-    run_seed(1);
-    run_seed(42);
-    run_seed(20260705);
+    using Inline = itch::BookManager<>;
+    using Pooled = itch::BookManager<std::nullptr_t, itch::Book<itch::PooledOrderStore>>;
+    using Hashed = itch::BookManager<std::nullptr_t, itch::Book<itch::HashOrderStore>>;
+    for (const std::uint64_t seed : {1, 42, 20260705}) {
+        run_seed<Inline>(seed);
+        run_seed<Pooled>(seed);
+        run_seed<Hashed>(seed);
+    }
     RUN_END();
 }

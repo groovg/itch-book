@@ -24,14 +24,17 @@ struct Top {
     std::uint32_t orders;
 };
 
+template <typename Store = OrderStore>
 class Book {
   public:
+    using StoreType = Store;
+
     struct Entry {
         std::int64_t key;
         Handle level;
     };
 
-    void add(OrderStore& os, std::uint64_t ref, Order& o, std::int64_t price_raw) {
+    void add(Store& os, std::uint64_t ref, Order& o, std::int64_t price_raw) {
         const bool buy = o.buy != 0;
         const std::int64_t key = buy ? price_raw : -price_raw;
         const Handle h = find_or_create(buy, key);
@@ -49,7 +52,7 @@ class Book {
         os.note_live(ref);
     }
 
-    std::uint32_t reduce(OrderStore& os, std::uint64_t ref, Order& o, std::uint32_t shares) {
+    std::uint32_t reduce(Store& os, std::uint64_t ref, Order& o, std::uint32_t shares) {
         const std::uint32_t take = shares < o.qty ? shares : o.qty;
         if (take == o.qty) {
             remove(os, ref, o);
@@ -60,7 +63,7 @@ class Book {
         return take;
     }
 
-    void remove(OrderStore& os, std::uint64_t ref, Order& o) {
+    void remove(Store& os, std::uint64_t ref, Order& o) {
         const Handle h = o.level;
         Level& lv = levels_[h];
         lv.shares -= o.qty;
@@ -77,7 +80,7 @@ class Book {
         os.note_dead(ref);
     }
 
-    Order* replace(OrderStore& os, std::uint64_t old_ref, Order& old_o, std::uint64_t new_ref,
+    Order* replace(Store& os, std::uint64_t old_ref, Order& old_o, std::uint64_t new_ref,
                    std::uint32_t shares, std::int64_t price_raw) {
         const std::uint8_t buy = old_o.buy;
         remove(os, old_ref, old_o);
@@ -105,7 +108,7 @@ class Book {
     const std::vector<Entry>& side(bool buy) const { return buy ? bids_ : asks_; }
     const Level& level(Handle h) const { return levels_[h]; }
 
-    bool validate(const OrderStore& os) const {
+    bool validate(const Store& os) const {
         for (const bool buy : {true, false}) {
             const auto& s = buy ? bids_ : asks_;
             std::int64_t prev_key = INT64_MIN;

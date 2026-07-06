@@ -40,9 +40,11 @@ struct Stats {
     std::uint64_t clamped = 0;
 };
 
-template <typename OnBbo = std::nullptr_t>
+template <typename OnBbo = std::nullptr_t, typename BookT = Book<>>
 class BookManager {
   public:
+    using Store = typename BookT::StoreType;
+
     BookManager() = default;
     explicit BookManager(OnBbo on_bbo) : on_bbo_(std::move(on_bbo)) {}
 
@@ -56,16 +58,17 @@ class BookManager {
             ++stats_.rejected;
             return;
         }
-        Book& b = ensure(m.hdr.locate);
-        Order& o = os_.touch(m.ref);
-        if (o.level != kNil) {
+        BookT& b = ensure(m.hdr.locate);
+        Order* o = &os_.touch(m.ref);
+        if (o->level != kNil) {
             ++stats_.dup_ref;
-            books_[o.locate].remove(os_, m.ref, o);
+            books_[o->locate].remove(os_, m.ref, *o);
+            o = &os_.touch(m.ref);
         }
-        o.qty = m.shares;
-        o.locate = m.hdr.locate;
-        o.buy = m.side == Side::Buy ? 1 : 0;
-        b.add(os_, m.ref, o, m.price.raw());
+        o->qty = m.shares;
+        o->locate = m.hdr.locate;
+        o->buy = m.side == Side::Buy ? 1 : 0;
+        b.add(os_, m.ref, *o, m.price.raw());
         ++stats_.adds;
         check_top(m.hdr.locate);
     }
@@ -97,7 +100,7 @@ class BookManager {
             return;
         }
         const std::uint16_t loc = o->locate;
-        Book& b = books_[loc];
+        BookT& b = books_[loc];
         if (m.shares == 0 || m.price.raw() <= 0 || m.new_ref == kNilRef) {
             b.remove(os_, m.old_ref, *o);
             ++stats_.rejected;
@@ -112,7 +115,7 @@ class BookManager {
         check_top(loc);
     }
 
-    const Book* book(std::uint16_t locate) const {
+    const BookT* book(std::uint16_t locate) const {
         return locate < books_.size() ? &books_[locate] : nullptr;
     }
 
@@ -123,7 +126,7 @@ class BookManager {
 
     Bbo bbo(std::uint16_t locate) const {
         Bbo r{};
-        if (const Book* b = book(locate)) {
+        if (const BookT* b = book(locate)) {
             r.has_bid = b->top(true, r.bid);
             r.has_ask = b->top(false, r.ask);
         }
@@ -132,11 +135,11 @@ class BookManager {
 
     std::size_t book_count() const { return books_.size(); }
     const Stats& stats() const { return stats_; }
-    const OrderStore& orders() const { return os_; }
-    OrderStore& orders() { return os_; }
+    const Store& orders() const { return os_; }
+    Store& orders() { return os_; }
 
   private:
-    Book& ensure(std::uint16_t locate) {
+    BookT& ensure(std::uint16_t locate) {
         if (locate >= books_.size()) {
             books_.resize(locate + 1);
             symbols_.resize(locate + 1, wire::Alpha<8>{{' ', ' ', ' ', ' ', ' ', ' ', ' ', ' '}});
@@ -159,7 +162,7 @@ class BookManager {
 
     void check_top(std::uint16_t locate) {
         if constexpr (!std::is_same_v<OnBbo, std::nullptr_t>) {
-            const Book& b = books_[locate];
+            const BookT& b = books_[locate];
             Bbo now{};
             now.has_bid = b.top(true, now.bid);
             now.has_ask = b.top(false, now.ask);
@@ -170,8 +173,8 @@ class BookManager {
         }
     }
 
-    OrderStore os_;
-    std::vector<Book> books_;
+    Store os_;
+    std::vector<BookT> books_;
     std::vector<wire::Alpha<8>> symbols_;
     std::vector<Bbo> last_;
     Stats stats_;
