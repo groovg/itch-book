@@ -62,6 +62,18 @@ inline void dispatch(char type, const std::byte* m, H& h) {
             if constexpr (requires { h.on_trade(Trade::decode(m)); })
                 h.on_trade(Trade::decode(m));
             break;
+        case 'H':
+            if constexpr (requires { h.on_trading_action(TradingAction::decode(m)); })
+                h.on_trading_action(TradingAction::decode(m));
+            break;
+        case 'Q':
+            if constexpr (requires { h.on_cross(CrossTrade::decode(m)); })
+                h.on_cross(CrossTrade::decode(m));
+            break;
+        case 'B':
+            if constexpr (requires { h.on_broken(BrokenTrade::decode(m)); })
+                h.on_broken(BrokenTrade::decode(m));
+            break;
         default:
             if constexpr (requires { h.on_other(type); }) h.on_other(type);
             break;

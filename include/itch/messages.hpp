@@ -222,4 +222,38 @@ struct Trade {
     }
 };
 
+struct TradingAction {
+    Header hdr;
+    wire::Alpha<8> stock;
+    char state;
+    wire::Alpha<4> reason;
+
+    static TradingAction decode(const std::byte* m) {
+        return {header(m), wire::alpha<8>(m + 11), wire::ch(m + 19), wire::alpha<4>(m + 21)};
+    }
+};
+
+struct CrossTrade {
+    Header hdr;
+    std::uint64_t shares;
+    wire::Alpha<8> stock;
+    Price price;
+    std::uint64_t match;
+    char cross_type;
+
+    static CrossTrade decode(const std::byte* m) {
+        return {header(m),      wire::u64(m + 11), wire::alpha<8>(m + 19),
+                price4(m + 27), wire::u64(m + 31), wire::ch(m + 39)};
+    }
+};
+
+struct BrokenTrade {
+    Header hdr;
+    std::uint64_t match;
+
+    static BrokenTrade decode(const std::byte* m) {
+        return {header(m), wire::u64(m + 11)};
+    }
+};
+
 }  // namespace itch

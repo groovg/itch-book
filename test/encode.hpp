@@ -153,6 +153,22 @@ inline void trade(std::vector<std::byte>& out, std::uint16_t locate, std::uint64
     msg(out, 'P', locate, ts).u64(0).ch('B').u32(shares).str(stock, 8).u32(price).u64(match).done();
 }
 
+inline void trading_action(std::vector<std::byte>& out, std::uint16_t locate, std::uint64_t ts,
+                           std::string_view stock, char state, std::string_view reason) {
+    msg(out, 'H', locate, ts).str(stock, 8).ch(state).ch(' ').str(reason, 4).done();
+}
+
+inline void cross_trade(std::vector<std::byte>& out, std::uint16_t locate, std::uint64_t ts,
+                        std::uint64_t shares, std::string_view stock, std::uint32_t price,
+                        std::uint64_t match, char cross_type) {
+    msg(out, 'Q', locate, ts).u64(shares).str(stock, 8).u32(price).u64(match).ch(cross_type).done();
+}
+
+inline void broken_trade(std::vector<std::byte>& out, std::uint16_t locate, std::uint64_t ts,
+                         std::uint64_t match) {
+    msg(out, 'B', locate, ts).u64(match).done();
+}
+
 inline void end_of_session(std::vector<std::byte>& out) {
     out.push_back(std::byte{0});
     out.push_back(std::byte{0});

@@ -150,6 +150,9 @@ struct Recorder {
     std::optional<OrderDelete> del;
     std::optional<OrderReplace> replace;
     std::optional<Trade> trade;
+    std::optional<TradingAction> action;
+    std::optional<CrossTrade> cross;
+    std::optional<BrokenTrade> broken;
 
     void on_system_event(const SystemEvent& m) { sys = m; }
     void on_stock_directory(const StockDirectory& m) { dir = m; }
@@ -160,6 +163,9 @@ struct Recorder {
     void on_delete(const OrderDelete& m) { del = m; }
     void on_replace(const OrderReplace& m) { replace = m; }
     void on_trade(const Trade& m) { trade = m; }
+    void on_trading_action(const TradingAction& m) { action = m; }
+    void on_cross(const CrossTrade& m) { cross = m; }
+    void on_broken(const BrokenTrade& m) { broken = m; }
 };
 
 void decode_all_types() {
@@ -176,11 +182,14 @@ void decode_all_types() {
     enc::order_delete(buf, 42, 34200'000'000'007ull, 1002);
     enc::order_replace(buf, 42, 34200'000'000'008ull, 1001, 1003, 400, 1'856'000);
     enc::trade(buf, 42, 34200'000'000'009ull, 75, "AAPL", 1'857'200, 555003);
+    enc::trading_action(buf, 42, 34200'000'000'010ull, "AAPL", 'H', "LUDP");
+    enc::cross_trade(buf, 42, 34200'000'000'011ull, 120'000, "AAPL", 1'857'000, 555004, 'O');
+    enc::broken_trade(buf, 42, 34200'000'000'012ull, 555003);
     enc::end_of_session(buf);
 
     Recorder h;
     auto r = parse(buf, h);
-    CHECK(r.messages == 10);
+    CHECK(r.messages == 13);
     CHECK(r.unknown == 0);
     CHECK(r.malformed == 0);
     CHECK(r.end_of_session);
@@ -233,6 +242,84 @@ void decode_all_types() {
     CHECK(h.trade->price.raw() == 1'857'200);
     CHECK(h.trade->match == 555003);
     CHECK(h.trade->hdr.locate == 42);
+
+    CHECK(h.action && h.action->stock.view() == "AAPL");
+    CHECK(h.action->state == 'H');
+    CHECK(h.action->reason.view() == "LUDP");
+
+    CHECK(h.cross && h.cross->shares == 120'000);
+    CHECK(h.cross->stock.view() == "AAPL");
+    CHECK(h.cross->price.raw() == 1'857'000);
+    CHECK(h.cross->match == 555004);
+    CHECK(h.cross->cross_type == 'O');
+
+    CHECK(h.broken && h.broken->match == 555003);
+    CHECK(h.broken->hdr.timestamp == 34200'000'000'012ull);
+}
+
+void manager_trading_state_and_prints() {
+    std::vector<std::byte> halted;
+    enc::stock_directory(halted, 3, 1, "TEST", 100);
+    enc::trading_action(halted, 3, 2, "TEST", 'H', "T1  ");
+    enc::add_order(halted, 3, 3, 900, 'B', 100, "TEST", 500'000);
+    enc::add_order(halted, 3, 4, 901, 'S', 80, "TEST", 510'000);
+
+    std::vector<std::byte> trading;
+    enc::trading_action(trading, 3, 5, "TEST", 'T', "    ");
+    enc::order_executed(trading, 3, 6, 900, 30, 71);
+    enc::order_executed_price(trading, 3, 7, 900, 20, 72, true, 495'000);
+    enc::order_executed_price(trading, 3, 8, 900, 10, 73, false, 495'000);
+    enc::trade(trading, 3, 9, 75, "TEST", 505'000, 74);
+    enc::cross_trade(trading, 3, 10, 120'000, "TEST", 502'000, 75, 'O');
+    enc::broken_trade(trading, 3, 11, 74);
+
+    std::vector<TradePrint> prints;
+    auto sink = [&prints](const TradePrint& p) { prints.push_back(p); };
+    BookManager<std::nullptr_t, Book<>, decltype(sink)> mgr(nullptr, sink);
+
+    parse(halted, mgr);
+    CHECK(mgr.trading_state(3) == 'H');
+    CHECK(mgr.trading_state(4) == ' ');
+    // order maintenance continues during a halt
+    Bbo q = mgr.bbo(3);
+    CHECK(q.has_bid && q.bid.price.raw() == 500'000);
+    CHECK(q.has_ask && q.ask.price.raw() == 510'000);
+
+    parse(trading, mgr);
+    CHECK(mgr.trading_state(3) == 'T');
+
+    CHECK(prints.size() == 5);
+    CHECK(prints[0].source == 'E');
+    CHECK(prints[0].price.raw() == 500'000);
+    CHECK(prints[0].shares == 30);
+    CHECK(prints[0].side == 'B');
+    CHECK(prints[0].match == 71);
+    CHECK(prints[0].locate == 3);
+    CHECK(prints[0].timestamp == 6);
+
+    CHECK(prints[1].source == 'C');
+    CHECK(prints[1].price.raw() == 495'000);
+    CHECK(prints[1].shares == 20);
+    CHECK(prints[1].side == 'B');
+
+    CHECK(prints[2].source == 'P');
+    CHECK(prints[2].price.raw() == 505'000);
+    CHECK(prints[2].shares == 75);
+    CHECK(prints[2].side == 'B');
+
+    CHECK(prints[3].source == 'Q');
+    CHECK(prints[3].shares == 120'000);
+    CHECK(prints[3].price.raw() == 502'000);
+    CHECK(prints[3].match == 75);
+    CHECK(prints[3].side == ' ');
+
+    CHECK(prints[4].source == 'B');
+    CHECK(prints[4].match == 74);
+    CHECK(prints[4].shares == 0);
+
+    // the executes above also mutated the book: 100 - 30 - 20 - 10 = 40 left
+    q = mgr.bbo(3);
+    CHECK(q.has_bid && q.bid.shares == 40);
 }
 
 void mutation_robustness() {
@@ -280,6 +367,7 @@ int main() {
     scan_truncated_tail();
     scan_unknown_and_malformed();
     decode_all_types();
+    manager_trading_state_and_prints();
     mutation_robustness();
     partial_handler_compiles();
     RUN_END();
