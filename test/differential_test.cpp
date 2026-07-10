@@ -98,7 +98,7 @@ void run_seed(std::uint64_t seed) {
 }  // namespace
 
 int main() {
-    using Inline = itch::BookManager<>;
+    using Inline = itch::BookManager<std::nullptr_t, itch::Book<itch::OrderStore>>;
     using Pooled = itch::BookManager<std::nullptr_t, itch::Book<itch::PooledOrderStore>>;
     using Hashed = itch::BookManager<std::nullptr_t, itch::Book<itch::HashOrderStore>>;
     for (const std::uint64_t seed : {1, 42, 20260705}) {

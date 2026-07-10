@@ -49,7 +49,8 @@ int main(int argc, char** argv) {
         const char* v = argv[2];
 
         if (std::strcmp(v, "inline") == 0) {
-            run_manager<itch::BookManager<>>(v, data, base);
+            run_manager<itch::BookManager<std::nullptr_t, itch::Book<itch::OrderStore>>>(
+                v, data, base);
         } else if (std::strcmp(v, "pooled") == 0) {
             run_manager<itch::BookManager<std::nullptr_t, itch::Book<itch::PooledOrderStore>>>(
                 v, data, base);
