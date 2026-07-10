@@ -40,7 +40,8 @@ void run_manager(const char* name, std::span<const std::byte> data, std::size_t 
 
 int main(int argc, char** argv) {
     if (argc != 3) {
-        std::fprintf(stderr, "usage: book_throughput <itch50-file> <inline|pooled|hash|naive>\n");
+        std::fprintf(stderr,
+                     "usage: book_throughput <itch50-file> <inline|pooled|hash|flathash|naive>\n");
         return 2;
     }
     try {
@@ -56,6 +57,9 @@ int main(int argc, char** argv) {
                 v, data, base);
         } else if (std::strcmp(v, "hash") == 0) {
             run_manager<itch::BookManager<std::nullptr_t, itch::Book<itch::HashOrderStore>>>(
+                v, data, base);
+        } else if (std::strcmp(v, "flathash") == 0) {
+            run_manager<itch::BookManager<std::nullptr_t, itch::Book<itch::FlatHashOrderStore>>>(
                 v, data, base);
         } else if (std::strcmp(v, "naive") == 0) {
             refimpl::Reference ref;

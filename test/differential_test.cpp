@@ -101,10 +101,12 @@ int main() {
     using Inline = itch::BookManager<std::nullptr_t, itch::Book<itch::OrderStore>>;
     using Pooled = itch::BookManager<std::nullptr_t, itch::Book<itch::PooledOrderStore>>;
     using Hashed = itch::BookManager<std::nullptr_t, itch::Book<itch::HashOrderStore>>;
+    using FlatHashed = itch::BookManager<std::nullptr_t, itch::Book<itch::FlatHashOrderStore>>;
     for (const std::uint64_t seed : {1, 42, 20260705}) {
         run_seed<Inline>(seed);
         run_seed<Pooled>(seed);
         run_seed<Hashed>(seed);
+        run_seed<FlatHashed>(seed);
     }
     RUN_END();
 }

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <bit>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -195,6 +196,96 @@ class PooledOrderStore {
     std::vector<std::unique_ptr<Page>> spare_;
     std::vector<Order> pool_;
     std::vector<Handle> free_;
+};
+
+// Open-addressing hash table over the ref space: fibonacci hashing, linear probing,
+// backward-shift deletion (no tombstones, so probe chains never rot over a full day).
+class FlatHashOrderStore {
+    struct Slot {
+        std::uint64_t ref;
+        Order o;
+    };
+
+  public:
+    FlatHashOrderStore() { rehash(std::size_t{1} << 22); }
+
+    Order* find(std::uint64_t ref) {
+        Slot& s = slots_[probe(ref)];
+        return s.ref == ref && s.o.level != kNil ? &s.o : nullptr;
+    }
+
+    const Order* find(std::uint64_t ref) const {
+        const Slot& s = slots_[probe(ref)];
+        return s.ref == ref && s.o.level != kNil ? &s.o : nullptr;
+    }
+
+    Order& touch(std::uint64_t ref) {
+        if ((size_ + 1) * 10 >= slots_.size() * 7) rehash(slots_.size() * 2);
+        Slot& s = slots_[probe(ref)];
+        if (s.ref != ref) {
+            s.ref = ref;
+            s.o.level = kNil;
+            ++size_;
+        }
+        return s.o;
+    }
+
+    void note_live(std::uint64_t) {}
+
+    void note_dead(std::uint64_t ref) { erase(probe(ref)); }
+
+    void reserve(std::uint64_t, std::uint64_t max_live, std::size_t) {
+        std::size_t want = slots_.size();
+        while (max_live * 10 >= want * 7) want *= 2;
+        if (want > slots_.size()) rehash(want);
+    }
+
+    std::uint64_t live_orders() const { return size_; }
+
+  private:
+    std::size_t home(std::uint64_t ref) const {
+        return static_cast<std::size_t>((ref * 0x9e3779b97f4a7c15ull) >> shift_);
+    }
+
+    std::size_t probe(std::uint64_t ref) const {
+        std::size_t i = home(ref);
+        while (slots_[i].ref != ref && slots_[i].ref != kNilRef) i = (i + 1) & mask_;
+        return i;
+    }
+
+    void erase(std::size_t i) {
+        std::size_t j = i;
+        for (;;) {
+            j = (j + 1) & mask_;
+            if (slots_[j].ref == kNilRef) break;
+            const std::size_t k = home(slots_[j].ref);
+            if (((j - k) & mask_) >= ((j - i) & mask_)) {
+                slots_[i] = slots_[j];
+                i = j;
+            }
+        }
+        slots_[i].ref = kNilRef;
+        slots_[i].o.level = kNil;
+        --size_;
+    }
+
+    void rehash(std::size_t new_cap) {
+        std::vector<Slot> old = std::move(slots_);
+        slots_.assign(new_cap, Slot{});
+        mask_ = new_cap - 1;
+        shift_ = 64 - static_cast<unsigned>(std::countr_zero(new_cap));
+        for (const Slot& s : old) {
+            if (s.ref == kNilRef) continue;
+            std::size_t i = home(s.ref);
+            while (slots_[i].ref != kNilRef) i = (i + 1) & mask_;
+            slots_[i] = s;
+        }
+    }
+
+    std::vector<Slot> slots_;
+    std::size_t mask_ = 0;
+    unsigned shift_ = 64;
+    std::uint64_t size_ = 0;
 };
 
 class HashOrderStore {
