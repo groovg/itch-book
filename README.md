@@ -39,6 +39,23 @@ Trades h;
 itch::parse(file.bytes(), h);
 ```
 
+Input does not have to be one whole buffer. `StreamParser` reassembles frames that arrive
+split across arbitrary chunk boundaries (socket reads, packet payloads); whole frames
+inside a chunk are still parsed in place, only a partial tail is ever copied:
+
+```cpp
+itch::StreamParser stream(books);
+while (read_chunk(buf)) stream.feed(buf);
+```
+
+The manager can also emit a time-and-sales stream — `E` executions print at the *resting
+order's* price, which only the book knows, plus printable `C`, non-cross trades, crosses
+and broken-trade voids, all in feed order:
+
+```cpp
+itch::BookManager tape(nullptr, [](const itch::TradePrint& t) { /* ... */ });
+```
+
 Build and test:
 
 ```
@@ -106,6 +123,10 @@ floats, `from_raw` costs nothing.
 - `reserve()` on the manager and the store pre-sizes everything for a strict
   zero-allocation steady state (verified by a test that counts global `operator new`
   calls across 400k messages after warm-up: zero).
+- **Trading-action state** (`H`) is tracked per locate and queryable
+  (`trading_state(locate)`), but books are deliberately not gated on it: Nasdaq keeps
+  order maintenance flowing during halts, so a handler that stops applying messages on
+  `H` resumes with a corrupt book.
 
 Robustness rules: unknown refs are counted and ignored, duplicate adds replace the stale
 order, over-sized executes clamp, zero-share or zero-price messages are rejected — each
@@ -147,19 +168,25 @@ minus the input buffer):
 
 | variant | throughput | per message | structures |
 |---|---|---|---|
-| **pooled pages + order pool (default)** | **16.8 M msg/s** | **60 ns** | **~1.4 GB** |
-| inline paged records | 16.3 M msg/s | 61 ns | ~9.8 GB |
-| `unordered_map` ref index, same book | 6.4 M msg/s | 157 ns | ~0.3 GB |
-| naive book (`std::map` + `unordered_map`) | 3.8 M msg/s | 264 ns | ~0.2 GB |
+| **pooled pages + order pool (default)** | **17.3 M msg/s** | **58 ns** | **~1.4 GB** |
+| inline paged records | 14.5 M msg/s | 69 ns | ~9.8 GB |
+| open-addressing flat hash | 9.7 M msg/s | 103 ns | ~0.3 GB |
+| `unordered_map` ref index, same book | 5.7 M msg/s | 174 ns | ~0.3 GB |
+| naive book (`std::map` + `unordered_map`) | 3.5 M msg/s | 287 ns | ~0.2 GB |
 
 Where the factors come from: replacing `std::map` levels with the sorted vector is
-~1.7× (touch-local scans instead of pointer chasing); replacing the hash ref-index with
-paged direct indexing is another ~2.6× (one arithmetic dereference, no hashing, no probe
-chains, no rehash stalls — and near-monotonic refs keep the hot pages cached). The
-inline variant stores whole 32-byte order records in the pages and skips the second
-indirection, but at ~10 GB of sparse pages the TLB pressure eats the win; the pooled
-variant keeps the live set compact and is both faster and 7× smaller. The `itch-replay
---book` tool — mmap file, BBO tracking on — does the same day at 12.8 M msg/s.
+~1.6× (touch-local scans instead of pointer chasing); replacing the hash ref-index with
+paged direct indexing is another ~3× (one arithmetic dereference, no hashing, no probe
+chains, no rehash stalls — and near-monotonic refs keep the hot pages cached). The flat
+hash (fibonacci hashing, linear probing, backward-shift deletion) isolates how much of
+the `unordered_map` cost is the container itself: dropping per-node allocation and
+bucket-chain chasing buys ~1.7×, but it still hashes, probes and moves 40-byte slots on
+every delete, where the direct index just dereferences — when the key space is day-unique
+and near-dense, indexing beats even a good hash. The inline variant stores whole order
+records in the pages and skips the second indirection, but at ~10 GB of sparse pages the
+TLB pressure eats the win; the pooled variant keeps the live set compact and is both
+faster and 7× smaller. The `itch-replay --book` tool — mmap file, BBO tracking on — does
+the same day at 12.8 M msg/s.
 
 Per-operation apply latency (rdtsc via
 [tsc-latency](https://github.com/groovg/tsc-latency), uncorrected, includes the ~10 ns
@@ -187,14 +214,12 @@ at all times.
 
 ## Limitations
 
-- **File replay, not a live feed handler.** No MoldUDP64/SoupBinTCP session layer, no
-  A/B feed arbitration, no gap requests, and `parse` expects whole frames in one buffer —
-  there is no partial-message reassembly for chunked streams.
-- Book-affecting messages plus trades are decoded; trading actions (`H`), crosses (`Q`),
-  broken trades (`B`) and NOII are framed and counted but not decoded — books are not
-  gated on halts, and cross/broken prints are not tracked.
-- Executed/cancelled volume is not aggregated; the `C` printable flag is exposed but no
-  time-and-sales stream is built.
+- **Replay, not a live feed handler.** `StreamParser` reassembles frames split across
+  arbitrary chunk boundaries, but there is no MoldUDP64/SoupBinTCP session layer on top —
+  no A/B feed arbitration, no gap or retransmission requests.
+- Book-affecting messages, trades and trade voids (`P`/`Q`/`B`) and trading actions (`H`)
+  are decoded; NOII, RegSHO, LULD and the other administrative types are framed and
+  counted but not decoded.
 - Order references are trusted to be locate-consistent (the order's stored locate wins
   over the message header on E/X/D/U, so a corrupt feed cannot cross-corrupt books).
 - Single-threaded by design; shard symbols across instances above the library if needed.
@@ -202,9 +227,9 @@ at all times.
 
 ## What I would do differently in production
 
-MoldUDP64 with A/B arbitration and gap-fill in front of the parser; halt/cross-aware
-book state machine; pinned cores, huge pages for the order pool, and an `io_uring`
-read path on Linux; per-symbol sharding with an SPSC handoff per shard.
+MoldUDP64 with A/B arbitration and gap-fill feeding `StreamParser`; pinned cores, huge
+pages for the order pool, and an `io_uring` read path on Linux; per-symbol sharding with
+an SPSC handoff per shard.
 
 ## License
 
