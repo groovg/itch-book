@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstring>
 #include <span>
 #include <vector>
 
@@ -24,7 +25,7 @@ class StreamParser {
         while (n > 0 && !pending_.empty()) {
             const std::size_t need = pending_need();
             const std::size_t take = need < n ? need : n;
-            pending_.insert(pending_.end(), p, p + take);
+            append(p, take);
             p += take;
             n -= take;
             if (pending_need() == 0) {
@@ -35,8 +36,7 @@ class StreamParser {
         }
         const ParseResult bulk = parse({p, n}, h_);
         accumulate(bulk);
-        if (!r_.end_of_session && bulk.consumed < n)
-            pending_.assign(p + bulk.consumed, p + n);
+        if (!r_.end_of_session && bulk.consumed < n) append(p + bulk.consumed, n - bulk.consumed);
         return r_;
     }
 
@@ -45,6 +45,12 @@ class StreamParser {
 
   private:
     static constexpr std::size_t kMaxFrame = 2 + 0xffff;
+
+    void append(const std::byte* p, std::size_t n) {
+        const std::size_t old = pending_.size();
+        pending_.resize(old + n);
+        std::memcpy(pending_.data() + old, p, n);
+    }
 
     std::size_t pending_need() const {
         if (pending_.size() < 2) return 2 - pending_.size();
