@@ -242,6 +242,40 @@ void crossed_detection() {
     CHECK(b.validate(os));
 }
 
+// Chains must survive table growth: unlink/relink touches live neighbours mid-operation,
+// so a rehash there would leave dangling references (caught under ASan) or torn chains.
+void flathash_rehash_keeps_chains() {
+    FlatHashOrderStore os(16);
+    Book<FlatHashOrderStore> b;
+    constexpr std::uint64_t kOrders = 400;
+
+    for (std::uint64_t r = 1; r <= kOrders; ++r) {
+        Order& o = os.touch(r);
+        o.qty = 10;
+        o.buy = r % 2;
+        b.add(os, r, o, static_cast<std::int64_t>(1'000'000 + (r % 5) * 1'000));
+    }
+    CHECK(os.live_orders() == kOrders);
+    CHECK(b.validate(os));
+
+    for (std::uint64_t r = 2; r <= kOrders; r += 3) b.remove(os, r, *os.find(r));
+    CHECK(b.validate(os));
+
+    for (std::uint64_t r = 1; r <= kOrders; r += 3) {
+        Order* o = os.find(r);
+        CHECK(b.replace(os, r, *o, r + kOrders, 20,
+                        static_cast<std::int64_t>(1'000'000 + (r % 7) * 1'000)) != nullptr);
+    }
+    CHECK(b.validate(os));
+
+    for (std::uint64_t r = 1; r <= 2 * kOrders; ++r) {
+        Order* o = os.find(r);
+        if (o) b.remove(os, r, *o);
+    }
+    CHECK(os.live_orders() == 0);
+    CHECK(b.side(true).empty() && b.side(false).empty());
+}
+
 }  // namespace
 
 int main() {
@@ -259,5 +293,6 @@ int main() {
     chained_replace();
     replace_duplicate_new_ref();
     crossed_detection();
+    flathash_rehash_keeps_chains();
     RUN_END();
 }

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cassert>
 #include <cstddef>
 #include <cstdint>
 #include <vector>
@@ -166,7 +167,8 @@ class Book {
         const std::int64_t key = levels_[h].key;
         std::vector<Entry>& s = key > 0 ? bids_ : asks_;
         std::size_t i = s.size();
-        while (s[i - 1].level != h) --i;
+        while (i > 0 && s[i - 1].level != h) --i;
+        assert(i > 0);
         s.erase(s.begin() + static_cast<std::ptrdiff_t>(i - 1));
         free_.push_back(h);
     }

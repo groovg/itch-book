@@ -15,6 +15,9 @@ inline constexpr Handle kNil = 0xffffffffu;
 inline constexpr std::uint64_t kNilRef = 0;
 inline constexpr std::uint64_t kMaxRef = std::uint64_t{1} << 36;
 
+// Store contract: touch() of a ref that is already live never invalidates Order
+// references handed out earlier; only touching a fresh ref may (pool growth, rehash).
+// Book's unlink/relink sequencing depends on this.
 struct Order {
     std::uint64_t prev;
     std::uint64_t next;
@@ -207,7 +210,9 @@ class FlatHashOrderStore {
     };
 
   public:
-    FlatHashOrderStore() { rehash(std::size_t{1} << 22); }
+    explicit FlatHashOrderStore(std::size_t initial_cap = std::size_t{1} << 22) {
+        rehash(std::bit_ceil(initial_cap));
+    }
 
     Order* find(std::uint64_t ref) {
         Slot& s = slots_[probe(ref)];
@@ -220,14 +225,17 @@ class FlatHashOrderStore {
     }
 
     Order& touch(std::uint64_t ref) {
-        if ((size_ + 1) * 10 >= slots_.size() * 7) rehash(slots_.size() * 2);
-        Slot& s = slots_[probe(ref)];
-        if (s.ref != ref) {
-            s.ref = ref;
-            s.o.level = kNil;
+        std::size_t i = probe(ref);
+        if (slots_[i].ref != ref) {
+            if ((size_ + 1) * 10 >= slots_.size() * 7) {
+                rehash(slots_.size() * 2);
+                i = probe(ref);
+            }
+            slots_[i].ref = ref;
+            slots_[i].o.level = kNil;
             ++size_;
         }
-        return s.o;
+        return slots_[i].o;
     }
 
     void note_live(std::uint64_t) {}
