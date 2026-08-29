@@ -7,8 +7,8 @@ target_compile_features(itch_book INTERFACE cxx_std_23)
 
 include(FetchContent)
 FetchContent_Declare(fixed_decimal
-  GIT_REPOSITORY https://github.com/groovg/fixed-decimal
-  GIT_TAG ca1765785647e9118b6c9a4f6e173fbab53217fe
+  URL https://github.com/groovg/fixed-decimal/archive/a25e15801e32977df9abbea6a1819eecc9befaa9.tar.gz
+  URL_HASH SHA256=aedd636c8ba9874f7fdeda5b7e7d08f4a6a38c9cb0cc330153865bfe7202d5fa
   SOURCE_SUBDIR cpp)
 FetchContent_MakeAvailable(fixed_decimal)
 target_link_libraries(itch_book INTERFACE fixed_decimal)
