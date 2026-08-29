@@ -1,6 +1,12 @@
 build/
+dist/
 *.o
 *.exe
+*.pyd
+*.so
+__pycache__/
+.pytest_cache/
+*.egg-info/
 .cache/
 compile_commands.json
 *.NASDAQ_ITCH50*

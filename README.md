@@ -70,6 +70,34 @@ Tools: `itch-replay <file> [--book]` (per-type counts, or full book replay with 
 `-DITCH_BENCH_LATENCY=ON`, x86 only). GCC and Clang; MSVC is out because the price
 type needs `__int128`.
 
+## Python
+
+The same core ships as a Python package (`pip install itch-book`, PyPI release pending; until
+then `pip install .` from a checkout, which needs a C++23 compiler and CMake). It reads raw or
+gzipped day files straight from emi.nasdaq.com and hands out columnar batches as numpy arrays,
+zero-copy, so Polars, pandas and pyarrow ingest them without conversion.
+
+```python
+import itch_book as ib
+
+feed = ib.open("20190730.BX_ITCH_50.gz")          # session date from the filename
+for batch in feed.batches(tables=("bbo", "symbols"), rows=1_000_000):
+    df = ib.to_polars(batch.bbo)                  # ts_event as Datetime("ns", "UTC")
+feed.stats                                        # message counts and book invariants
+```
+
+`bbo` has one row per best-bid/offer change: `ts_event` (int64 ns UTC = New York midnight
+of the session plus the ITCH timestamp), `seq`, `locate`, `bid_px`, `bid_sz`, `bid_ct`,
+`ask_px`, `ask_sz`, `ask_ct`. Prices are float64 by default (every ITCH `Price(4)` is exact
+in a double) or the raw int64 mantissa with `price_type="fixed"`; an empty side is NaN / 0.
+`symbols` is the stock directory keyed by `locate`. Decompression runs on a reader thread
+in Python's zlib; the parser and books run in C++ with the GIL released.
+
+BX 2019-07-30 (391 MB gzip, 28.7M messages, 8,849 symbols): 2.3 s wall on the machine
+above, gunzip included, 19.1M `bbo` rows out, every book invariant at zero. The build is a
+real abi3 wheel (3.12+); Windows builds with clang-cl. Trades, the enriched order-by-order
+table, depth snapshots and a Parquet CLI follow.
+
 ## Wire format notes
 
 Every message sits behind a 2-byte big-endian length prefix; a zero length marks end of
