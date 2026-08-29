@@ -38,6 +38,37 @@ jobs:
       - run: cmake --build build
       - run: ctest --test-dir build --output-on-failure
 
+  python:
+    name: Python (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        id: build-py
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-python@v5
+        id: test-py
+        with:
+          python-version: "3.13"
+      - if: runner.os == 'Windows'
+        run: |
+          echo "CMAKE_GENERATOR=Ninja" >> "$GITHUB_ENV"
+          echo "CMAKE_ARGS=-DCMAKE_CXX_COMPILER=clang-cl" >> "$GITHUB_ENV"
+      - run: '"${{ steps.build-py.outputs.python-path }}" -m pip install ninja'
+      - run: '"${{ steps.build-py.outputs.python-path }}" -m pip wheel . -w dist --no-deps -v'
+      - run: '"${{ steps.test-py.outputs.python-path }}" -m pip install abi3audit pytest polars'
+      - run: '"${{ steps.test-py.outputs.python-path }}" -m abi3audit --strict --report dist/*.whl'
+      - run: '"${{ steps.test-py.outputs.python-path }}" -m pip install --only-binary=:all: --find-links dist itch-book'
+      - run: '"${{ steps.test-py.outputs.python-path }}" -m pytest -q'
+
   fuzz:
     name: Fuzz (libFuzzer)
     runs-on: ubuntu-latest
