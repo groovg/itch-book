@@ -42,15 +42,19 @@ struct Stats {
 
 // One time-and-sales record. source: 'E' execute at the resting price, 'C' execute at a
 // message price (printable only), 'P' non-cross trade, 'Q' cross, 'B' broken (voids a
-// prior match; price/shares are zero). side is the resting order's side where known.
+// prior match; price/shares are zero). side is the resting order's side for E and C and
+// blank otherwise (the P side field is always 'B' on the wire and carries no information);
+// order_id is the resting order for E and C, zero otherwise.
 struct TradePrint {
     std::uint64_t timestamp;
     std::uint64_t match;
+    std::uint64_t order_id;
     Price price;
     std::uint64_t shares;
     std::uint16_t locate;
     char source;
     char side;
+    char cross_type;
 };
 
 template <typename OnBbo = std::nullptr_t, typename BookT = Book<>,
@@ -102,7 +106,7 @@ class BookManager {
             if (const Order* o = os_.find(m.ref)) {
                 const Level& lv = books_[o->locate].level(o->level);
                 emit(o->locate, m.hdr.timestamp, Price::from_raw(o->buy ? lv.key : -lv.key),
-                     m.shares, m.match, 'E', o->buy ? 'B' : 'S');
+                     m.shares, m.match, m.ref, 'E', o->buy ? 'B' : 'S', ' ');
             }
         }
         reduce(m.ref, m.shares, stats_.executes);
@@ -112,8 +116,8 @@ class BookManager {
         if constexpr (kTrades) {
             if (m.printable) {
                 if (const Order* o = os_.find(m.ref))
-                    emit(o->locate, m.hdr.timestamp, m.price, m.shares, m.match, 'C',
-                         o->buy ? 'B' : 'S');
+                    emit(o->locate, m.hdr.timestamp, m.price, m.shares, m.match, m.ref, 'C',
+                         o->buy ? 'B' : 'S', ' ');
             }
         }
         reduce(m.ref, m.shares, stats_.executes);
@@ -122,20 +126,20 @@ class BookManager {
     void on_trade(const Trade& m)
         requires kTrades
     {
-        emit(m.hdr.locate, m.hdr.timestamp, m.price, m.shares, m.match, 'P',
-             static_cast<char>(m.side));
+        emit(m.hdr.locate, m.hdr.timestamp, m.price, m.shares, m.match, 0, 'P', ' ', ' ');
     }
 
     void on_cross(const CrossTrade& m)
         requires kTrades
     {
-        emit(m.hdr.locate, m.hdr.timestamp, m.price, m.shares, m.match, 'Q', ' ');
+        emit(m.hdr.locate, m.hdr.timestamp, m.price, m.shares, m.match, 0, 'Q', ' ',
+             m.cross_type);
     }
 
     void on_broken(const BrokenTrade& m)
         requires kTrades
     {
-        emit(m.hdr.locate, m.hdr.timestamp, Price::from_raw(0), 0, m.match, 'B', ' ');
+        emit(m.hdr.locate, m.hdr.timestamp, Price::from_raw(0), 0, m.match, 0, 'B', ' ', ' ');
     }
 
     void on_cancel(const OrderCancel& m) { reduce(m.ref, m.shares, stats_.cancels); }
@@ -159,6 +163,13 @@ class BookManager {
             return;
         }
         const std::uint16_t loc = o->locate;
+        if (m.new_ref != m.old_ref) {
+            if (Order* n = os_.find(m.new_ref)) {
+                ++stats_.dup_ref;
+                books_[n->locate].remove(os_, m.new_ref, *n);
+                o = os_.find(m.old_ref);
+            }
+        }
         BookT& b = books_[loc];
         if (m.shares == 0 || m.price.raw() <= 0 || m.new_ref == kNilRef ||
             m.new_ref >= kMaxRef) {
@@ -222,9 +233,11 @@ class BookManager {
     }
 
     void emit(std::uint16_t locate, std::uint64_t ts, Price price, std::uint64_t shares,
-              std::uint64_t match, char source, char side) {
+              std::uint64_t match, std::uint64_t order_id, char source, char side,
+              char cross_type) {
         if constexpr (kTrades)
-            on_trade_(TradePrint{ts, match, price, shares, locate, source, side});
+            on_trade_(TradePrint{ts, match, order_id, price, shares, locate, source, side,
+                                 cross_type});
     }
 
     void reduce(std::uint64_t ref, std::uint32_t shares, std::uint64_t& counter) {

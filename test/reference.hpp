@@ -52,7 +52,8 @@ class Reference {
         if (m.shares == 0 || m.price.raw() <= 0 || m.new_ref == 0 ||
             m.new_ref >= itch::kMaxRef)
             return;
-        if (orders_.find(m.new_ref) != orders_.end()) return;
+        auto dup = orders_.find(m.new_ref);
+        if (dup != orders_.end()) remove_order(dup);
         insert(m.new_ref, {old.locate, old.buy, m.price.raw(), m.shares});
     }
 

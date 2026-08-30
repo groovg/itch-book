@@ -296,26 +296,33 @@ void manager_trading_state_and_prints() {
     CHECK(prints[0].match == 71);
     CHECK(prints[0].locate == 3);
     CHECK(prints[0].timestamp == 6);
+    CHECK(prints[0].order_id == 900);
+    CHECK(prints[0].cross_type == ' ');
 
     CHECK(prints[1].source == 'C');
     CHECK(prints[1].price.raw() == 495'000);
     CHECK(prints[1].shares == 20);
     CHECK(prints[1].side == 'B');
+    CHECK(prints[1].order_id == 900);
 
     CHECK(prints[2].source == 'P');
     CHECK(prints[2].price.raw() == 505'000);
     CHECK(prints[2].shares == 75);
-    CHECK(prints[2].side == 'B');
+    CHECK(prints[2].side == ' ');
+    CHECK(prints[2].order_id == 0);
 
     CHECK(prints[3].source == 'Q');
     CHECK(prints[3].shares == 120'000);
     CHECK(prints[3].price.raw() == 502'000);
     CHECK(prints[3].match == 75);
     CHECK(prints[3].side == ' ');
+    CHECK(prints[3].order_id == 0);
+    CHECK(prints[3].cross_type == 'O');
 
     CHECK(prints[4].source == 'B');
     CHECK(prints[4].match == 74);
     CHECK(prints[4].shares == 0);
+    CHECK(prints[4].order_id == 0);
 
     // the executes above also mutated the book: 100 - 30 - 20 - 10 = 40 left
     q = mgr.bbo(3);
