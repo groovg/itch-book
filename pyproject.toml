@@ -12,8 +12,9 @@ requires-python = ">=3.12"
 authors = [{ name = "groovg" }]
 keywords = ["nasdaq", "itch", "totalview", "order-book", "market-data", "microstructure", "parquet"]
 classifiers = [
+  "Development Status :: 3 - Alpha",
   "Programming Language :: C++",
-  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
   "Topic :: Office/Business :: Financial",
   "Topic :: Scientific/Engineering",
 ]
@@ -22,6 +23,7 @@ dependencies = ["numpy>=1.24", "tzdata"]
 [project.optional-dependencies]
 polars = ["polars>=1.0"]
 pyarrow = ["pyarrow>=15"]
+test = ["pytest", "polars>=1.0", "abi3audit"]
 
 [project.urls]
 Homepage = "https://github.com/groovg/itch-book"

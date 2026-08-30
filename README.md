@@ -86,17 +86,46 @@ for batch in feed.batches(tables=("bbo", "symbols"), rows=1_000_000):
 feed.stats                                        # message counts and book invariants
 ```
 
-`bbo` has one row per best-bid/offer change: `ts_event` (int64 ns UTC = New York midnight
-of the session plus the ITCH timestamp), `seq`, `locate`, `bid_px`, `bid_sz`, `bid_ct`,
-`ask_px`, `ask_sz`, `ask_ct`. Prices are float64 by default (every ITCH `Price(4)` is exact
-in a double) or the raw int64 mantissa with `price_type="fixed"`; an empty side is NaN / 0.
+Every table carries `ts_event` (int64 ns UTC: New York midnight of the session plus the
+ITCH timestamp), `seq` (ordinal among decoded messages) and `locate`. Prices are float64
+by default (every ITCH `Price(4)` is exact in a double) or the raw int64 mantissa with
+`price_type="fixed"`; a missing price is NaN / 0. Single-character columns come out as
+`S1`; `to_polars` turns them into strings. `rows` is a lower bound per batch: batches are
+cut at chunk boundaries.
+
+| table | one row per | columns |
+|---|---|---|
+| `bbo` | best bid or offer change (price or size) | `bid_px bid_sz bid_ct ask_px ask_sz ask_ct` |
+| `trades` | E, printable C, P, Q, B | `kind price size side order_id match_number cross_type` |
+| `messages` | A, F, E, C, X, D, U | `type action side price size remaining printable order_id old_order_id mpid` |
+| `system_events` | S | `event` |
+| `symbols` | R | the stock directory fields |
+
+`trades`: an `E` prints at the resting order's price, a `C` at the message price and only
+when printable, `side` is the resting side for E/C and `N` otherwise (the P side field is
+always `B` on the wire and carries nothing), `order_id` is the resting order for E/C and 0
+otherwise, `size` is uint64 because cross sizes are 8 bytes. A `B` row carries only
+`match_number`; the trade it voids may sit in an earlier batch, so anti-join over the day.
+
+`messages` is order-by-order with the resting state looked up before the message is
+applied: `side`, `locate` and (for E/X/D) `price` come from the resting order, so a D/X/E
+row is self-contained; `remaining` is what is left after apply, clamped at zero. `action`
+is `A` add, `F` fill (E/C), `C` cancel (X/D), `M` replace (U, where `order_id` is the new
+reference and `old_order_id` the old). Rows the book did not apply say so: `side == N` means
+the reference was unknown and nothing changed; an A or U with `remaining == 0` was rejected
+(zero shares or price). An A or U onto a live reference evicts it first. Non-printable C
+executions are here with `printable == False` and absent from `trades`. `mpid` indexes
+`feed.mpids` (0 = none) and is only set on F rows. `test_tables.py` replays this table with
+those rules and reproduces `bbo` exactly on random days that include unknown references,
+over-sized executes and duplicate references.
+
 `symbols` is the stock directory keyed by `locate`. Decompression runs on a reader thread
 in Python's zlib; the parser and books run in C++ with the GIL released.
 
-BX 2019-07-30 (391 MB gzip, 28.7M messages, 8,849 symbols): 2.3 s wall on the machine
-above, gunzip included, 19.1M `bbo` rows out, every book invariant at zero. The build is a
-real abi3 wheel (3.12+); Windows builds with clang-cl. Trades, the enriched order-by-order
-table, depth snapshots and a Parquet CLI follow.
+BX 2019-07-30 (391 MB gzip, 28.7M messages, 8,849 symbols) on the machine above, gunzip
+included: `bbo` alone 2.3 s (19.1M rows), all five tables 2.5 s (`messages` 23.8M rows,
+`trades` 925k), every book invariant at zero. The build is a real abi3 wheel (3.12+);
+Windows builds with clang-cl. Depth snapshots and the Parquet CLI follow.
 
 ## Wire format notes
 
