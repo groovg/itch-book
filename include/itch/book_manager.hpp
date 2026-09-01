@@ -90,7 +90,9 @@ class BookManager {
         Order* o = &os_.touch(m.ref);
         if (o->level != kNil) {
             ++stats_.dup_ref;
-            books_[o->locate].remove(os_, m.ref, *o);
+            evicted_ = o->locate;
+            books_[evicted_].remove(os_, m.ref, *o);
+            if (evicted_ != m.hdr.locate) check_top(evicted_);
             o = &os_.touch(m.ref);
         }
         o->qty = m.shares;
@@ -166,7 +168,9 @@ class BookManager {
         if (m.new_ref != m.old_ref) {
             if (Order* n = os_.find(m.new_ref)) {
                 ++stats_.dup_ref;
-                books_[n->locate].remove(os_, m.new_ref, *n);
+                evicted_ = n->locate;
+                books_[evicted_].remove(os_, m.new_ref, *n);
+                if (evicted_ != loc) check_top(evicted_);
                 o = os_.find(m.old_ref);
             }
         }
@@ -218,6 +222,7 @@ class BookManager {
 
     std::size_t book_count() const { return books_.size(); }
     const Stats& stats() const { return stats_; }
+    std::uint16_t last_evicted_locate() const { return evicted_; }
     const Store& orders() const { return os_; }
     Store& orders() { return os_; }
 
@@ -271,6 +276,7 @@ class BookManager {
     std::vector<Bbo> last_;
     std::vector<char> state_;
     Stats stats_;
+    std::uint16_t evicted_ = 0;
     [[no_unique_address]] OnBbo on_bbo_{};
     [[no_unique_address]] OnTrade on_trade_{};
 };

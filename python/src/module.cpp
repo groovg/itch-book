@@ -1,7 +1,10 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/ndarray.h>
+#include <nanobind/stl/string.h>
+#include <nanobind/stl/vector.h>
 
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <string>
 #include <unordered_map>
@@ -54,6 +57,24 @@ struct MessageColumns {
     }
 };
 
+struct DepthColumns {
+    std::vector<std::uint64_t> ts, seq;
+    std::vector<std::uint16_t> locate;
+    std::vector<std::vector<std::int64_t>> bid_px, ask_px;
+    std::vector<std::vector<std::uint32_t>> bid_sz, bid_ct, ask_sz, ask_ct;
+
+    explicit DepthColumns(std::size_t n)
+        : bid_px(n), ask_px(n), bid_sz(n), bid_ct(n), ask_sz(n), ask_ct(n) {}
+
+    template <typename F>
+    void each(F f) {
+        f(ts); f(seq); f(locate);
+        for (std::size_t i = 0; i < bid_px.size(); ++i) {
+            f(bid_px[i]); f(bid_sz[i]); f(bid_ct[i]); f(ask_px[i]); f(ask_sz[i]); f(ask_ct[i]);
+        }
+    }
+};
+
 struct EventColumns {
     std::vector<std::uint64_t> ts, seq;
     std::vector<std::uint8_t> event;
@@ -93,6 +114,7 @@ class Session {
             s.stamp(m.hdr);
             mgr.on_stock_directory(m);
             s.symbols_.push_back(m);
+            s.select_locate(m);
         }
         void on_trading_action(const itch::TradingAction& m) {
             s.stamp(m.hdr);
@@ -101,57 +123,65 @@ class Session {
         void on_add(const itch::AddOrder& m) {
             s.stamp(m.hdr);
             const std::uint64_t rejected = mgr.stats().rejected;
+            const std::uint64_t dups = mgr.stats().dup_ref;
             mgr.on_add(m);
             if (s.messages_on_)
                 s.emit_message(m.hdr.locate, m.attributed ? 'F' : 'A', 'A',
                                static_cast<char>(m.side), m.price.raw(), m.shares,
                                mgr.stats().rejected == rejected ? m.shares : 0, m.ref, 0,
                                m.attributed ? s.mpid_id(m.mpid) : 0, true);
+            if (mgr.stats().dup_ref != dups && mgr.last_evicted_locate() != m.hdr.locate)
+                s.emit_depth(mgr.last_evicted_locate());
+            s.emit_depth(m.hdr.locate);
         }
         void on_execute(const itch::OrderExecuted& m) {
             s.stamp(m.hdr);
-            if (s.messages_on_) {
-                const Resting r = s.resting(m.ref, m.hdr.locate);
+            const Resting r = s.resting(m.ref, m.hdr.locate);
+            if (s.messages_on_)
                 s.emit_message(r.locate, 'E', 'F', r.side, r.px, m.shares, s.left(r, m.shares),
                                m.ref, 0, 0, true);
-            }
             mgr.on_execute(m);
+            s.emit_depth(r.locate);
         }
         void on_execute_price(const itch::OrderExecutedPrice& m) {
             s.stamp(m.hdr);
-            if (s.messages_on_) {
-                const Resting r = s.resting(m.ref, m.hdr.locate);
+            const Resting r = s.resting(m.ref, m.hdr.locate);
+            if (s.messages_on_)
                 s.emit_message(r.locate, 'C', 'F', r.side, m.price.raw(), m.shares,
                                s.left(r, m.shares), m.ref, 0, 0, m.printable);
-            }
             mgr.on_execute_price(m);
+            s.emit_depth(r.locate);
         }
         void on_cancel(const itch::OrderCancel& m) {
             s.stamp(m.hdr);
-            if (s.messages_on_) {
-                const Resting r = s.resting(m.ref, m.hdr.locate);
+            const Resting r = s.resting(m.ref, m.hdr.locate);
+            if (s.messages_on_)
                 s.emit_message(r.locate, 'X', 'C', r.side, r.px, m.shares, s.left(r, m.shares),
                                m.ref, 0, 0, true);
-            }
             mgr.on_cancel(m);
+            s.emit_depth(r.locate);
         }
         void on_delete(const itch::OrderDelete& m) {
             s.stamp(m.hdr);
-            if (s.messages_on_) {
-                const Resting r = s.resting(m.ref, m.hdr.locate);
+            const Resting r = s.resting(m.ref, m.hdr.locate);
+            if (s.messages_on_)
                 s.emit_message(r.locate, 'D', 'C', r.side, r.px, r.qty, 0, m.ref, 0, 0, true);
-            }
             mgr.on_delete(m);
+            s.emit_depth(r.locate);
         }
         void on_replace(const itch::OrderReplace& m) {
             s.stamp(m.hdr);
-            const Resting r = s.messages_on_ ? s.resting(m.old_ref, m.hdr.locate) : Resting{};
+            const Resting r = s.resting(m.old_ref, m.hdr.locate);
             const std::uint64_t rejected = mgr.stats().rejected;
+            const std::uint64_t dups = mgr.stats().dup_ref;
             mgr.on_replace(m);
             if (s.messages_on_)
                 s.emit_message(r.locate, 'U', 'M', r.side, m.price.raw(), m.shares,
                                r.found && mgr.stats().rejected == rejected ? m.shares : 0,
                                m.new_ref, m.old_ref, 0, true);
+            if (mgr.stats().dup_ref != dups && mgr.last_evicted_locate() != r.locate)
+                s.emit_depth(mgr.last_evicted_locate());
+            s.emit_depth(r.locate);
         }
         void on_trade(const itch::Trade& m) {
             s.stamp(m.hdr);
@@ -169,14 +199,17 @@ class Session {
     };
 
   public:
-    Session(bool bbo, bool trades, bool messages)
+    Session(bool bbo, bool trades, bool messages, std::size_t depth, std::vector<std::string> symbols)
         : mgr_(Sink{this}, TradeSink{this}),
           handler_{*this, mgr_},
           parser_(handler_),
+          depth_(depth),
+          wanted_(std::move(symbols)),
           bbo_on_(bbo),
           trades_on_(trades),
           messages_on_(messages) {
         mpids_.emplace_back();
+        for (std::string& w : wanted_) w.resize(8, ' ');
     }
     Session(const Session&) = delete;
     Session& operator=(const Session&) = delete;
@@ -187,6 +220,10 @@ class Session {
         if (bbo_on_) bbo_.each(grow);
         if (trades_on_) trades_.each(grow);
         if (messages_on_) messages_.each(grow);
+        if (depth_) {
+            const std::size_t depth_rows = depth_ > 10 ? rows * 10 / depth_ : rows;
+            depth_cols_.each([depth_rows](auto& v) { v.reserve(depth_rows); });
+        }
     }
 
     void feed(const std::uint8_t* p, std::size_t n) {
@@ -197,6 +234,7 @@ class Session {
         std::size_t n = bbo_.ts.size();
         if (trades_.ts.size() > n) n = trades_.ts.size();
         if (messages_.ts.size() > n) n = messages_.ts.size();
+        if (depth_cols_.ts.size() > n) n = depth_cols_.ts.size();
         return n;
     }
 
@@ -244,6 +282,23 @@ class Session {
         d["order_id"] = take(messages_.order_id);
         d["old_order_id"] = take(messages_.old_order_id);
         d["mpid"] = take(messages_.mpid);
+        return d;
+    }
+
+    nb::dict take_depth() {
+        nb::dict d;
+        d["ts"] = take(depth_cols_.ts);
+        d["seq"] = take(depth_cols_.seq);
+        d["locate"] = take(depth_cols_.locate);
+        char name[16];
+        for (std::size_t i = 0; i < depth_; ++i) {
+            std::snprintf(name, sizeof name, "bid_px_%02zu", i); d[name] = take(depth_cols_.bid_px[i]);
+            std::snprintf(name, sizeof name, "bid_sz_%02zu", i); d[name] = take(depth_cols_.bid_sz[i]);
+            std::snprintf(name, sizeof name, "bid_ct_%02zu", i); d[name] = take(depth_cols_.bid_ct[i]);
+            std::snprintf(name, sizeof name, "ask_px_%02zu", i); d[name] = take(depth_cols_.ask_px[i]);
+            std::snprintf(name, sizeof name, "ask_sz_%02zu", i); d[name] = take(depth_cols_.ask_sz[i]);
+            std::snprintf(name, sizeof name, "ask_ct_%02zu", i); d[name] = take(depth_cols_.ask_ct[i]);
+        }
         return d;
     }
 
@@ -301,6 +356,7 @@ class Session {
         d["books"] = mgr_.book_count();
         d["live_orders"] = mgr_.orders().live_orders();
         d["crossed_books"] = crossed;
+        d["selected"] = wanted_.empty() ? nb::object(nb::none()) : nb::object(nb::int_(selected_count_));
         return d;
     }
 
@@ -316,6 +372,22 @@ class Session {
     void stamp(const itch::Header& h) {
         ts_ = h.timestamp;
         ++seq_;
+    }
+
+    bool selected(std::uint16_t locate) const {
+        return wanted_.empty() || (locate < selected_.size() && selected_[locate]);
+    }
+
+    void select_locate(const itch::StockDirectory& m) {
+        if (wanted_.empty()) return;
+        for (const std::string& w : wanted_) {
+            if (std::memcmp(w.data(), m.stock.raw.data(), 8) == 0) {
+                if (m.hdr.locate >= selected_.size()) selected_.resize(m.hdr.locate + 1, false);
+                if (!selected_[m.hdr.locate]) ++selected_count_;
+                selected_[m.hdr.locate] = true;
+                return;
+            }
+        }
     }
 
     Resting resting(std::uint64_t ref, std::uint16_t fallback_locate) const {
@@ -342,7 +414,7 @@ class Session {
     }
 
     void emit_bbo(std::uint16_t locate, const itch::Bbo& b) {
-        if (!bbo_on_) return;
+        if (!bbo_on_ || !selected(locate)) return;
         bbo_.ts.push_back(ts_);
         bbo_.seq.push_back(seq_);
         bbo_.locate.push_back(locate);
@@ -355,7 +427,7 @@ class Session {
     }
 
     void emit_trade(const itch::TradePrint& p) {
-        if (!trades_on_) return;
+        if (!trades_on_ || !selected(p.locate)) return;
         trades_.ts.push_back(p.timestamp);
         trades_.seq.push_back(seq_);
         trades_.locate.push_back(p.locate);
@@ -371,6 +443,7 @@ class Session {
     void emit_message(std::uint16_t locate, char type, char action, char side, std::int64_t px,
                       std::uint32_t size, std::uint32_t remaining, std::uint64_t order_id,
                       std::uint64_t old_order_id, std::uint16_t mpid, bool printable) {
+        if (!selected(locate)) return;
         messages_.ts.push_back(ts_);
         messages_.seq.push_back(seq_);
         messages_.locate.push_back(locate);
@@ -386,13 +459,57 @@ class Session {
         messages_.mpid.push_back(mpid);
     }
 
+    void emit_depth(std::uint16_t locate) {
+        if (!depth_ || !selected(locate)) return;
+        const itch::Book<>* b = mgr_.book(locate);
+        if (!b) return;
+        scratch_.assign(depth_ * 6, 0);
+        for (int side = 0; side < 2; ++side) {
+            const bool buy = side == 0;
+            const auto& entries = b->side(buy);
+            const std::size_t n = entries.size() < depth_ ? entries.size() : depth_;
+            for (std::size_t i = 0; i < n; ++i) {
+                const itch::Level& lv = b->level(entries[entries.size() - 1 - i].level);
+                std::int64_t* slot = &scratch_[(side * depth_ + i) * 3];
+                slot[0] = buy ? lv.key : -lv.key;
+                slot[1] = static_cast<std::int64_t>(lv.shares);
+                slot[2] = lv.orders;
+            }
+        }
+        if (locate >= last_depth_.size()) last_depth_.resize(locate + 1);
+        std::vector<std::int64_t>& last = last_depth_[locate];
+        if (last.empty()) last.assign(depth_ * 6, 0);
+        if (last == scratch_) return;
+        last.swap(scratch_);
+        depth_cols_.ts.push_back(ts_);
+        depth_cols_.seq.push_back(seq_);
+        depth_cols_.locate.push_back(locate);
+        for (std::size_t i = 0; i < depth_; ++i) {
+            const std::int64_t* bid = &last[i * 3];
+            const std::int64_t* ask = &last[(depth_ + i) * 3];
+            depth_cols_.bid_px[i].push_back(bid[0]);
+            depth_cols_.bid_sz[i].push_back(static_cast<std::uint32_t>(bid[1]));
+            depth_cols_.bid_ct[i].push_back(static_cast<std::uint32_t>(bid[2]));
+            depth_cols_.ask_px[i].push_back(ask[0]);
+            depth_cols_.ask_sz[i].push_back(static_cast<std::uint32_t>(ask[1]));
+            depth_cols_.ask_ct[i].push_back(static_cast<std::uint32_t>(ask[2]));
+        }
+    }
+
     Manager mgr_;
     Handler handler_;
     itch::StreamParser<Handler> parser_;
+    std::size_t depth_;
+    std::vector<std::string> wanted_;
+    std::vector<bool> selected_;
+    std::uint64_t selected_count_ = 0;
     BboColumns bbo_;
     TradeColumns trades_;
     MessageColumns messages_;
+    DepthColumns depth_cols_{depth_};
     EventColumns events_;
+    std::vector<std::vector<std::int64_t>> last_depth_;
+    std::vector<std::int64_t> scratch_;
     std::vector<itch::StockDirectory> symbols_;
     std::vector<std::string> mpids_;
     std::unordered_map<std::uint32_t, std::uint16_t> mpid_ids_;
@@ -407,7 +524,8 @@ class Session {
 
 NB_MODULE(_core, m) {
     nb::class_<Session>(m, "Session")
-        .def(nb::init<bool, bool, bool>(), nb::arg("bbo"), nb::arg("trades"), nb::arg("messages"))
+        .def(nb::init<bool, bool, bool, std::size_t, std::vector<std::string>>(), nb::arg("bbo"),
+             nb::arg("trades"), nb::arg("messages"), nb::arg("depth"), nb::arg("symbols"))
         .def("reserve", &Session::reserve)
         .def(
             "feed",
@@ -421,6 +539,7 @@ NB_MODULE(_core, m) {
         .def("take_bbo", &Session::take_bbo)
         .def("take_trades", &Session::take_trades)
         .def("take_messages", &Session::take_messages)
+        .def("take_depth", &Session::take_depth)
         .def("take_events", &Session::take_events)
         .def("take_symbols", &Session::take_symbols)
         .def("mpids", &Session::mpids)

@@ -181,7 +181,7 @@ def test_to_polars_types(path):
 
 def test_unknown_table_is_rejected(path):
     with pytest.raises(ValueError, match="unknown tables"):
-        list(ib.open(path).batches(tables=("depth",)))
+        list(ib.open(path).batches(tables=("quotes",)))
 
 
 def test_session_date_from_filename():

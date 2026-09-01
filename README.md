@@ -98,8 +98,17 @@ cut at chunk boundaries.
 | `bbo` | best bid or offer change (price or size) | `bid_px bid_sz bid_ct ask_px ask_sz ask_ct` |
 | `trades` | E, printable C, P, Q, B | `kind price size side order_id match_number cross_type` |
 | `messages` | A, F, E, C, X, D, U | `type action side price size remaining printable order_id old_order_id mpid` |
+| `depth` | change within the top N levels of either side (`depth=10`) | `bid_px_00 bid_sz_00 bid_ct_00 ask_px_00 … ask_ct_09` |
 | `system_events` | S | `event` |
 | `symbols` | R | the stock directory fields |
+
+`batches(..., symbols=("AAPL", "MSFT"))` keeps every book (executes and replaces need the
+order they refer to, wherever it lives) and emits rows only for the selected locates;
+`feed.stats` stays feed-wide, and `stats["selected"]` says how many names matched the
+day's directory (a miss is a warning). `depth` rows carry no trigger columns; join
+`messages` on `seq` for the event that produced a snapshot. On the BX day 99.8% of
+book-changing messages touch the top ten levels, so `depth` at N=10 is effectively one row
+per event there.
 
 `trades`: an `E` prints at the resting order's price, a `C` at the message price and only
 when printable, `side` is the resting side for E/C and `N` otherwise (the P side field is
@@ -123,9 +132,11 @@ over-sized executes and duplicate references.
 in Python's zlib; the parser and books run in C++ with the GIL released.
 
 BX 2019-07-30 (391 MB gzip, 28.7M messages, 8,849 symbols) on the machine above, gunzip
-included: `bbo` alone 2.3 s (19.1M rows), all five tables 2.5 s (`messages` 23.8M rows,
-`trades` 925k), every book invariant at zero. The build is a real abi3 wheel (3.12+);
-Windows builds with clang-cl. Depth snapshots and the Parquet CLI follow.
+included: `bbo` alone 2.3 s (19.1M rows), the five row tables without `depth` 2.5 s
+(`messages` 23.8M rows, `trades` 925k), every book invariant at zero. `depth` at N=10 for
+all 8,849 symbols is the one expensive table: 7.2 s for 23.8M rows of 63 columns; with
+three symbols selected the whole run is back to 2.3 s. The build is a real abi3 wheel
+(3.12+); Windows builds with clang-cl. The Parquet CLI follows.
 
 ## Wire format notes
 

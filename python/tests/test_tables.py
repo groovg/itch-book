@@ -181,13 +181,18 @@ def replay(ms):
         oid = int(ms["order_id"][i])
         loc = int(ms["locate"][i])
         rem = int(ms["remaining"][i])
+        touched = []
         if typ in "AF":
             if rem:
-                orders.pop(oid, None)
+                evicted = orders.pop(oid, None)
+                if evicted and evicted[0] != loc:
+                    touched.append(evicted[0])
                 orders[oid] = (loc, side, float(ms["price"][i]), rem)
         elif typ == "U":
             orders.pop(int(ms["old_order_id"][i]), None)
-            orders.pop(oid, None)
+            evicted = orders.pop(oid, None)
+            if evicted and evicted[0] != loc:
+                touched.append(evicted[0])
             if rem:
                 orders[oid] = (loc, side, float(ms["price"][i]), rem)
         else:
@@ -196,17 +201,19 @@ def replay(ms):
                 orders[oid] = (loc, side, px, rem)
             else:
                 orders.pop(oid, None)
-        bids = [(px, q) for l, s, px, q in orders.values() if l == loc and s == "B"]
-        asks = [(px, q) for l, s, px, q in orders.values() if l == loc and s == "S"]
-        best_bid = max(p for p, _ in bids) if bids else None
-        best_ask = min(p for p, _ in asks) if asks else None
-        top = (
-            best_bid, sum(q for p, q in bids if p == best_bid),
-            best_ask, sum(q for p, q in asks if p == best_ask),
-        )
-        if last.get(loc) != top:
-            last[loc] = top
-            out.append((int(ms["seq"][i]), loc) + top)
+        touched.append(loc)
+        for book in touched:
+            bids = [(px, q) for l, s, px, q in orders.values() if l == book and s == "B"]
+            asks = [(px, q) for l, s, px, q in orders.values() if l == book and s == "S"]
+            best_bid = max(p for p, _ in bids) if bids else None
+            best_ask = min(p for p, _ in asks) if asks else None
+            top = (
+                best_bid, sum(q for p, q in bids if p == best_bid),
+                best_ask, sum(q for p, q in asks if p == best_ask),
+            )
+            if last.get(book) != top:
+                last[book] = top
+                out.append((int(ms["seq"][i]), book) + top)
     return out
 
 

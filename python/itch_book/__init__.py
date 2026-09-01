@@ -3,6 +3,7 @@ import datetime as dt
 import gzip
 import queue
 import threading
+import warnings
 from collections.abc import Iterator
 from importlib.metadata import version
 from types import SimpleNamespace
@@ -16,7 +17,7 @@ __all__ = ["Feed", "to_polars"]
 __version__ = version("itch-book")
 
 PRICE_SCALE = 10_000
-TABLES = ("bbo", "trades", "messages", "symbols", "system_events")
+TABLES = ("bbo", "trades", "messages", "depth", "symbols", "system_events")
 SYMBOL_COLUMNS = (
     "locate", "symbol", "market_category", "financial_status", "round_lot_size",
     "round_lots_only", "issue_classification", "issue_subtype", "authenticity",
@@ -112,12 +113,21 @@ class Feed:
         t.join()
         self._thread = None
 
-    def batches(self, tables: tuple[str, ...] = ("bbo",), rows: int = 1_000_000) -> Iterator[SimpleNamespace]:
+    def batches(self, tables: tuple[str, ...] = ("bbo",), rows: int = 1_000_000,
+                depth: int = 10, symbols: str | tuple[str, ...] = ()) -> Iterator[SimpleNamespace]:
         self.close()
         unknown = set(tables) - set(TABLES)
         if unknown:
             raise ValueError(f"unknown tables {sorted(unknown)}; available: {TABLES}")
-        session = Session(bbo="bbo" in tables, trades="trades" in tables, messages="messages" in tables)
+        if not 1 <= depth <= 50:
+            raise ValueError("depth must be between 1 and 50")
+        if isinstance(symbols, str):
+            symbols = (symbols,)
+        wanted = sorted({s.upper() for s in symbols})
+        if any(len(s) > 8 for s in wanted):
+            raise ValueError("ITCH symbols are at most 8 characters")
+        session = Session(bbo="bbo" in tables, trades="trades" in tables, messages="messages" in tables,
+                          depth=depth if "depth" in tables else 0, symbols=wanted)
         session.reserve(rows + self.chunk_bytes // SMALLEST_FRAME)
         self._stop = threading.Event()
         self._queue = queue.Queue(maxsize=4)
@@ -138,6 +148,11 @@ class Feed:
                 raise ValueError(
                     f"{self.path}: {what} ({stats['messages']} messages decoded, "
                     f"{stats['pending_bytes']} trailing bytes)"
+                )
+            if wanted and stats["selected"] < len(wanted):
+                warnings.warn(
+                    f"{len(wanted) - stats['selected']} of {len(wanted)} symbols not in the stock directory of {self.path}",
+                    stacklevel=2,
                 )
             self.stats = stats
             yield self._batch(session, tables)
@@ -171,6 +186,12 @@ class Feed:
             self._price(cols, "price")
             self.mpids = session.mpids()
             out["messages"] = {k: cols[k] for k in MESSAGE_COLUMNS}
+        if "depth" in tables:
+            cols = self._common(session.take_depth())
+            for name in [c for c in cols if "_px_" in c]:
+                self._price(cols, name)
+            head = ("ts_event", "seq", "locate")
+            out["depth"] = {k: cols[k] for k in head} | {k: v for k, v in cols.items() if k not in head}
         if "system_events" in tables:
             cols = self._common(session.take_events())
             out["system_events"] = {k: cols[k] for k in EVENT_COLUMNS}
@@ -191,9 +212,7 @@ class Feed:
     def _price(self, cols: dict[str, np.ndarray], name: str) -> None:
         if self.price_type == "float":
             px = cols[name]
-            f = px / PRICE_SCALE
-            f[px == 0] = np.nan
-            cols[name] = f
+            cols[name] = np.where(px == 0, np.nan, px / PRICE_SCALE)
 
 
 def open(path: str, **kwargs) -> Feed:  # noqa: A001
