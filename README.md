@@ -134,9 +134,41 @@ in Python's zlib; the parser and books run in C++ with the GIL released.
 BX 2019-07-30 (391 MB gzip, 28.7M messages, 8,849 symbols) on the machine above, gunzip
 included: `bbo` alone 2.3 s (19.1M rows), the five row tables without `depth` 2.5 s
 (`messages` 23.8M rows, `trades` 925k), every book invariant at zero. `depth` at N=10 for
-all 8,849 symbols is the one expensive table: 7.2 s for 23.8M rows of 63 columns; with
+all 8,849 symbols is the one expensive table: 7.0 s for 23.8M rows of 63 columns; with
 three symbols selected the whole run is back to 2.3 s. The build is a real abi3 wheel
-(3.12+); Windows builds with clang-cl. The Parquet CLI follows.
+(3.12+); Windows builds with clang-cl.
+
+### itch2parquet
+
+`pip install 'itch-book[cli]'` adds a command that writes the tables as Parquet (pyarrow,
+zstd, one row group per batch) and takes care of getting the data:
+
+```
+itch2parquet list                                   # what emi.nasdaq.com has, with sizes and session dates
+itch2parquet fetch 20190730.BX_ITCH_50.gz --dir data # resumes a partial download, checks the published md5
+itch2parquet verify data/20190730.BX_ITCH_50.gz     # replays the day and prints the book invariants
+itch2parquet convert data/20190730.BX_ITCH_50.gz out # bbo + trades by default
+itch2parquet convert FILE out --tables messages,depth --symbols AAPL,MSFT --depth 5 --price-type fixed
+```
+
+Every row table gets a dictionary-encoded `symbol` column next to `locate`, `trades` gets a
+`broken` flag (true on a print that a later `B` voided; the `B` rows stay; the BX day above
+has no `B` at all, so that path is exercised by the tests only), and `symbols.parquet` /
+`system_events.parquet` are always written. Files are written to `.part` and renamed at the
+end, so a failed run leaves nothing behind, and stale table files from an earlier run in the
+same directory are removed first. The footer of each file carries `itch_book.*` key-value
+metadata: a schema version, the source file name and its md5, session date, time zone,
+`price_type` and `price_scale` (dollars = stored value / scale), the table list and symbol
+filter, tool version, creation time, and the full stats dictionary (message counts,
+unresolved references, `crossed_books` and `live_orders` as of the end of the file, last
+system event), so a Parquet file states where it came from and whether the book that
+produced it was clean. The session date comes from the filename (both emi naming schemes)
+and is printed when inferred; `--date` overrides it. `trades` is held in memory for the
+whole day to compute `broken` (about 50 bytes per print: ~100 MB for BX, ~1 GB for a NASDAQ
+day); the other tables stream. Unsigned columns are stored with Parquet unsigned
+annotations, which polars, pyarrow, duckdb and pandas read directly and some older JVM
+readers do not. There is no per-symbol partitioning; filter the tables afterwards. The BX
+day above converts to `bbo` (267 MB) + `trades` (15 MB) in 6.6 s including the md5 pass.
 
 ## Wire format notes
 

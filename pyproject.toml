@@ -22,8 +22,11 @@ dependencies = ["numpy>=1.24", "tzdata"]
 
 [project.optional-dependencies]
 polars = ["polars>=1.0"]
-pyarrow = ["pyarrow>=15"]
-test = ["pytest", "polars>=1.0", "abi3audit"]
+cli = ["pyarrow>=16"]
+test = ["pytest", "polars>=1.0", "pyarrow>=16", "abi3audit"]
+
+[project.scripts]
+itch2parquet = "itch_book.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/groovg/itch-book"
