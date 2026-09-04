@@ -4,11 +4,11 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "itch-book"
-version = "0.1.0a0"
+version = "0.1.0"
 description = "NASDAQ TotalView-ITCH 5.0 to research tables: BBO, trades, order book. C++23 core, zero-copy numpy."
 readme = "README.md"
 license = "MIT"
-requires-python = ">=3.12"
+requires-python = ">=3.10"
 authors = [{ name = "groovg" }]
 keywords = ["nasdaq", "itch", "totalview", "order-book", "market-data", "microstructure", "parquet"]
 classifiers = [
@@ -37,6 +37,22 @@ cmake.source-dir = "python"
 build-dir = "build/py/{wheel_tag}"
 wheel.packages = ["python/itch_book"]
 wheel.py-api = "cp312"
+
+[tool.cibuildwheel]
+build = ["cp310-*", "cp311-*", "cp312-*"]
+skip = "*-musllinux_*"
+archs = ["auto64"]
+manylinux-x86_64-image = "manylinux_2_28"
+manylinux-aarch64-image = "manylinux_2_28"
+test-requires = ["pytest", "polars>=1.0", "pyarrow>=16"]
+test-command = "pytest -q {project}/python/tests"
+
+[tool.cibuildwheel.macos.environment]
+MACOSX_DEPLOYMENT_TARGET = "11.0"
+
+[tool.cibuildwheel.windows.environment]
+CMAKE_GENERATOR = "Ninja"
+CMAKE_ARGS = "-DCMAKE_CXX_COMPILER=clang-cl"
 
 [tool.pytest.ini_options]
 testpaths = ["python/tests"]

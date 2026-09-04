@@ -72,10 +72,11 @@ type needs `__int128`.
 
 ## Python
 
-The same core ships as a Python package (`pip install itch-book`, PyPI release pending; until
-then `pip install .` from a checkout, which needs a C++23 compiler and CMake). It reads raw or
-gzipped day files straight from emi.nasdaq.com and hands out columnar batches as numpy arrays,
-zero-copy, so Polars, pandas and pyarrow ingest them without conversion.
+The same core ships as a Python package: `pip install itch-book`, wheels for Linux x86_64 and
+aarch64 (manylinux_2_28), macOS 11+ arm64 and x86_64, Windows x64, Python 3.10+; it depends on
+numpy and tzdata. A source build needs a C++23 compiler. It reads raw or gzipped day files
+straight from emi.nasdaq.com and hands out columnar batches as numpy arrays, zero-copy, so
+Polars, pandas and pyarrow ingest them without conversion.
 
 ```python
 import itch_book as ib
@@ -135,8 +136,8 @@ BX 2019-07-30 (391 MB gzip, 28.7M messages, 8,849 symbols) on the machine above,
 included: `bbo` alone 2.3 s (19.1M rows), the five row tables without `depth` 2.5 s
 (`messages` 23.8M rows, `trades` 925k), every book invariant at zero. `depth` at N=10 for
 all 8,849 symbols is the one expensive table: 7.0 s for 23.8M rows of 63 columns; with
-three symbols selected the whole run is back to 2.3 s. The build is a real abi3 wheel
-(3.12+); Windows builds with clang-cl.
+three symbols selected the whole run is back to 2.3 s. One abi3 wheel covers 3.12 and later,
+3.10 and 3.11 get their own; Windows builds with clang-cl (MSVC has no `__int128`).
 
 ### itch2parquet
 
