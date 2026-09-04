@@ -168,8 +168,57 @@ and is printed when inferred; `--date` overrides it. `trades` is held in memory 
 whole day to compute `broken` (about 50 bytes per print: ~100 MB for BX, ~1 GB for a NASDAQ
 day); the other tables stream. Unsigned columns are stored with Parquet unsigned
 annotations, which polars, pyarrow, duckdb and pandas read directly and some older JVM
-readers do not. There is no per-symbol partitioning; filter the tables afterwards. The BX
-day above converts to `bbo` (267 MB) + `trades` (15 MB) in 6.6 s including the md5 pass.
+readers do not. Each file records `ts_event` and `seq` as its Parquet sorting columns; both
+are non-decreasing over a whole day, verified on the days below. There is no per-symbol
+partitioning; filter the tables afterwards. The BX day above converts to `bbo` (267 MB) +
+`trades` (15 MB) in 6.6 s including the md5 pass.
+
+### Validation
+
+Numbers below are the 9950X3D machine above, `itch2parquet` from the installed wheel, driving
+each reference through its own documented interface.
+
+Book invariants, three days end to end (`itch2parquet verify`), every counter zero:
+
+| day | messages | unresolved refs | crossed at close | last event |
+|---|---|---|---|---|
+| 2019-12-30 NASDAQ (3.5 GB gz) | 268,744,780 | 0 | 0 | C (end of messages) |
+| 2025-11-28 NASDAQ `S*-v50` (4.7 GB gz) | 353,357,889 | 0 | 0 | C |
+| 2019-07-30 BX (0.39 GB gz) | 28,734,686 | 0 | 0 | C |
+
+The 2025 day carries message types absent in 2019 (they are counted, not decoded) and still
+closes clean, so the framing and the book survive a newer feed.
+
+Self-consistency: replaying the `messages` table through the documented rule set reproduces
+the `bbo` table row for row. On 2019-12-30 for AAPL, MSFT and SPY that is 2,170,927 top-of-book
+rows, identical. The same replay runs on synthetic days in CI over random feeds that include
+unknown references, over-sized executes and duplicate references.
+
+Cross-check against Databento XNAS.ITCH `mbp-1`, same day, same three symbols (2.17M records,
+$0.19 of metered data). Collapsed to the last state at each distinct nanosecond, the top-of-book
+prices agree on 99.69% (AAPL), 99.88% (MSFT) and 99.88% (SPY) of nanoseconds, and including the
+sizes on 99.2 to 99.8%. Sampling our book at every one of Databento's events instead drops the
+price agreement to 92 to 98%. Every disagreement at either granularity sits on a nanosecond that
+carries more than one ITCH message, where the two feeds order the sub-events within the
+nanosecond differently and Databento models an ITCH replace as a cancel plus an add; on a
+nanosecond that carries a single message the two books never disagree. Documented differences:
+this package has no `ts_recv` and no `publisher_id`, and an empty side is `NaN`/0 where Databento
+uses a sentinel.
+
+End to end on the 2019-12-30 NASDAQ day (3.5 GB gz, 268.7M messages), `bbo` + `trades`:
+
+| stage | wall | rate |
+|---|---|---|
+| gunzip only (Python zlib) | 19.9 s | 8.25 GB out |
+| + parse and apply, no output | 35.4 s | 7.6 M msg/s |
+| `itch2parquet convert` (adds Arrow + zstd write, 1.9 GB) | 61.8 s | 4.3 M msg/s |
+| same with the input md5 pass | 64.8 s | 4.1 M msg/s |
+
+For comparison on the same file and machine: `ml4t/itch-parser` (Rust, writes all 21 message
+types to 5.79 GB of Parquet, a heavier job than the two tables above) finishes in 106 s
+(2.5 M msg/s); MeatPy (pure Python) takes 6.4 min just to read the day's messages and 14 min
+to run its documented single-symbol order-book example (0.70 and 0.32 M msg/s). gunzip is a
+third of our wall time; libdeflate would move it.
 
 ## Wire format notes
 
@@ -228,7 +277,7 @@ floats, `from_raw` costs nothing.
   order maintenance flowing during halts, so a handler that stops applying messages on
   `H` resumes with a corrupt book.
 
-Robustness rules: unknown refs are counted and ignored, duplicate adds replace the stale
+Fault handling: unknown refs are counted and ignored, duplicate adds replace the stale
 order, over-sized executes clamp, zero-share or zero-price messages are rejected. Each
 path is unit-tested and mirrored exactly by the reference implementation used for
 differential testing.
@@ -309,7 +358,7 @@ charles-cooper/itch-order-book reports 61 ns/tick (~16.4 M msg/s) on a 2012 i7-3
 aggregate-only levels and a 4.4 GB preallocated ref array; CppTrader reports 3.2 M msg/s
 for its reference book and ~9.8 M for its stripped benchmark variant on an i7-4790K.
 Different hardware and different feature sets, so the numbers are not directly
-comparable; this implementation keeps FIFO queues, bounded memory and feed-robustness
+comparable; this implementation keeps FIFO queues, bounded memory and the feed-safety
 checks on at all times.
 
 ## Limitations
