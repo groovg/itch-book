@@ -118,7 +118,9 @@ class Writers:
 
         w = self.writers.get(table)
         if w is None:
-            w = pq.ParquetWriter(self.part(table), arrow.schema, compression="zstd")
+            names = arrow.schema.names
+            sorting = [pq.SortingColumn(names.index(c)) for c in ("ts_event", "seq") if c in names]
+            w = pq.ParquetWriter(self.part(table), arrow.schema, compression="zstd", sorting_columns=sorting or None)
             self.writers[table] = w
             self.rows[table] = 0
         if arrow.num_rows:
@@ -248,7 +250,10 @@ def convert(args) -> int:
 
 
 def verify(args) -> int:
-    date = dt.date.fromisoformat(args.date) if args.date else session_date(args.file) or dt.date(1970, 1, 1)
+    date = dt.date.fromisoformat(args.date) if args.date else session_date(args.file)
+    if date is None:
+        eprint("session date not in the filename; counting with 1970-01-01 (--date to set it)")
+        date = dt.date(1970, 1, 1)
     feed = Feed(args.file, date=date)
     for _ in feed.batches(tables=("system_events",), rows=1 << 30):
         pass
@@ -284,7 +289,7 @@ def list_files(args) -> int:
             continue
         print(d.rstrip("/"))
         for name, size, _href in parse_listing(html):
-            if size is None or name.endswith(".md5sum"):
+            if size is None or name.endswith((".md5sum", ".done")):
                 continue
             print(f"  {name:36s} {size / 1e9:6.2f} GB  {session_date(name) or '-'}")
     return 0
@@ -319,7 +324,7 @@ def download(url: str, part: Path, have: int, total: int) -> None:
                 f.write(chunk)
                 done += len(chunk)
                 if time.monotonic() - last > 2:
-                    eprint(f"  {done / 1e9:.2f} / {total / 1e9:.2f} GB")
+                    eprint(f"  {done / 1e9:.2f} / {total / 1e9:.2f} GB" if total else f"  {done / 1e9:.2f} GB")
                     last = time.monotonic()
 
 

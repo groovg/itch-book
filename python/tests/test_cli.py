@@ -2,6 +2,7 @@ import datetime as dt
 import gzip
 import hashlib
 import http.server
+import io
 import json
 import re
 import threading
@@ -71,6 +72,11 @@ def test_convert_default_tables(day, tmp_path, capsys):
     assert pa.types.is_dictionary(bbo.schema.field("symbol").type)
     assert bbo.column("symbol").to_pylist() == ["AAPL", "AAPL", "AAPL", "MSFT", "AAPL"]
     assert bbo.column("bid_px").to_pylist()[0] == 10.0
+
+    bbo_file = pq.ParquetFile(out / "bbo.parquet")
+    sorting = bbo_file.metadata.row_group(0).sorting_columns
+    names = bbo_file.schema_arrow.names
+    assert [names[s.column_index] for s in sorting] == ["ts_event", "seq"]
 
     assert pq.ParquetFile(out / "trades.parquet").num_row_groups == 2
     trades = pq.read_table(out / "trades.parquet")
@@ -162,6 +168,10 @@ def test_verify_pass_and_fail(day, tmp_path, capsys):
     truncated.write_bytes(stream()[:-7])
     assert cli.main(["verify", str(truncated)]) == 2
     assert "truncated" in capsys.readouterr().err
+    undated = tmp_path / "day.bin"
+    undated.write_bytes(stream())
+    assert cli.main(["verify", str(undated)]) == 0
+    assert "1970-01-01" in capsys.readouterr().err
 
 
 LISTING_HTML = (
@@ -179,6 +189,21 @@ def test_parse_listing_keeps_sizes_and_marks_directories():
     assert rows[1][0].endswith(".md5sum") and rows[1][1] == 70
     assert rows[2] == ("March 20", None, "/ITCH/Nasdaq%20BX%20ITCH/March%2020/")
     assert rows[3][1] == 0
+
+
+def test_list_skips_checksums_markers_and_directories(monkeypatch, capsys):
+    class Response(io.BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            pass
+
+    monkeypatch.setattr(cli, "http", lambda url, method="GET", headers=None: Response(LISTING_HTML.encode()))
+    assert cli.main(["list"]) == 0
+    out = capsys.readouterr().out
+    assert re.search(r"20190730\.BX_ITCH_50\.gz\s+0\.39 GB\s+2019-07-30", out)
+    assert ".md5sum" not in out and ".done" not in out and "March 20" not in out
 
 
 PAYLOAD = bytes(range(256)) * 40
