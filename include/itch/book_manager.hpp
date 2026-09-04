@@ -8,6 +8,12 @@
 #include "messages.hpp"
 #include "order_store.hpp"
 
+#ifdef _MSC_VER
+#define ITCH_NO_UNIQUE_ADDRESS [[msvc::no_unique_address]]
+#else
+#define ITCH_NO_UNIQUE_ADDRESS [[no_unique_address]]
+#endif
+
 namespace itch {
 
 struct Bbo {
@@ -277,8 +283,8 @@ class BookManager {
     std::vector<char> state_;
     Stats stats_;
     std::uint16_t evicted_ = 0;
-    [[no_unique_address]] OnBbo on_bbo_{};
-    [[no_unique_address]] OnTrade on_trade_{};
+    ITCH_NO_UNIQUE_ADDRESS OnBbo on_bbo_{};
+    ITCH_NO_UNIQUE_ADDRESS OnTrade on_trade_{};
 };
 
 }  // namespace itch
