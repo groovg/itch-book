@@ -161,7 +161,10 @@ near and current reference prices (NaN when not disseminated) and the cross it r
 T/H/P/Q with the four-letter `reason`) or `h` (operational halt, `state` H/T for the
 `market` Q/B/X). `reg_sho` carries the Reg SHO action (0/1/2) and `luld` the LULD auction
 collar reference, upper and lower prices with the extension counter. The other
-administrative types (L, V, W, K, N, O) are counted in `feed.stats` and not decoded.
+administrative types (L, V, W, K, N, O) are counted in `feed.stats` and not decoded. On
+2019-12-30 the four tables hold 4,024,315 `noii` rows (1.07M opening cross, 2.94M closing
+cross, 11k halt crosses), 8,966 `halts`, 9,013 `reg_sho` and 34 `luld` rows, and writing
+them alone takes 32 s for the day.
 
 BX 2019-07-30 (391 MB gzip, 28.7M messages, 8,849 symbols), gunzip included: `bbo` alone
 2.3 s (19.1M rows), the five row tables without `depth` 2.5 s (`messages` 23.8M rows,
@@ -208,7 +211,10 @@ for C), 5 execution of a hidden order (P; NASDAQ sends `B` in that message's sid
 direction is 1), 6 cross trade (Q, direction -1), 7 halt (H and h; price -1 halted or paused, 0
 quotation only, 1 trading, direction -1). A replace (U) becomes a deletion of the old order
 followed by a submission of the new one, and both rows carry the book state after the whole
-replace. Messages with an unknown order reference are left out.
+replace. Messages with an unknown order reference are left out. On 2019-12-30, AAPL, MSFT
+and SPY at ten levels are 1.58M, 1.25M and 2.19M rows (66 to 92 MB of messages, 310 to
+558 MB of orderbook per symbol) and take 49 s together, most of it in the per-symbol
+Python replay that turns replaces into delete and submit rows.
 
 ### Notes and limits
 
@@ -397,8 +403,16 @@ The 2019-12-30 NASDAQ day (3.5 GB gz, 268.7M messages), `bbo` + `trades`:
 |---|---|---|
 | gunzip only (Python zlib) | 19.9 s | 8.25 GB out |
 | + parse and apply, no output | 35.4 s | 7.6 M msg/s |
-| `itch2parquet convert` (adds Arrow + zstd write, 1.9 GB) | 61.8 s | 4.3 M msg/s |
-| same with the input md5 pass | 64.8 s | 4.1 M msg/s |
+| `itch2parquet convert` (adds Arrow + zstd write, 1.9 GB, on its own thread) | 45.1 s | 6.0 M msg/s |
+| same with the input md5 pass | 49.3 s | 5.5 M msg/s |
+
+Where the time goes: gunzip runs on the reader thread and is hidden; the consumer thread
+spends about 30 s in the C++ session (parse, book apply, column building) and 3 s in numpy
+post-processing; Arrow conversion and the zstd write overlap on the writer thread. The
+same core driven directly from C++ on the uncompressed day in RAM runs at 15 to 17 M msg/s
+(the table below), so the Python session layer costs about 1.5x over the bare core; the
+compiler is not the difference (clang, which builds the wheels, and GCC are within 10% of
+each other on this loop).
 
 On the same file and machine: `ml4t/itch-parser` (Rust, writes all 21 message types to
 5.79 GB of Parquet, a heavier job than the two tables above) finishes in 106 s
