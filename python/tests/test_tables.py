@@ -170,6 +170,8 @@ def test_tables_are_independent_and_bbo_unchanged(feed):
     bbo = out["bbo"]
     assert bbo["seq"].tolist()[:3] == [3, 4, 5]
     assert bbo["bid_px"][0] == 10.0 and math.isnan(bbo["ask_px"][0])
+    alone = gather(feed, ("trades",))["trades"]
+    assert all(np.array_equal(alone[k], out["trades"][k], equal_nan=alone[k].dtype.kind == "f") for k in alone)
 
 
 def test_fixed_prices_in_every_table(tmp_path):

@@ -9,7 +9,7 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/.. ${CMAKE_CURRENT_BINARY_DIR}/itch
 find_package(Python 3.10 COMPONENTS Interpreter Development.Module ${SKBUILD_SABI_COMPONENT} REQUIRED)
 find_package(nanobind CONFIG REQUIRED)
 
-nanobind_add_module(_core STABLE_ABI NB_STATIC src/module.cpp)
+nanobind_add_module(_core STABLE_ABI NB_STATIC NOMINSIZE src/module.cpp)
 target_link_libraries(_core PRIVATE itch_book)
 
 install(TARGETS _core LIBRARY DESTINATION itch_book)

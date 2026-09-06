@@ -4,7 +4,7 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "itch-book"
-version = "0.2.0"
+version = "0.2.1"
 description = "NASDAQ TotalView-ITCH 5.0 to research tables: BBO, trades, order book. C++23 core, zero-copy numpy."
 readme = "README.md"
 license = "MIT"

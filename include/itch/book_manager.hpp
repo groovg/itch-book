@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <cstdint>
 #include <type_traits>
 #include <vector>
@@ -227,6 +228,10 @@ class BookManager {
     }
 
     std::size_t book_count() const { return books_.size(); }
+    void track_bbo(bool on) {
+        if (on && !track_bbo_) std::fill(last_.begin(), last_.end(), Bbo{});
+        track_bbo_ = on;
+    }
     const Stats& stats() const { return stats_; }
     std::uint16_t last_evicted_locate() const { return evicted_; }
     const Store& orders() const { return os_; }
@@ -265,6 +270,7 @@ class BookManager {
 
     void check_top(std::uint16_t locate) {
         if constexpr (kBbo) {
+            if (!track_bbo_) return;
             const BookT& b = books_[locate];
             Bbo now{};
             now.has_bid = b.top(true, now.bid);
@@ -283,6 +289,7 @@ class BookManager {
     std::vector<char> state_;
     Stats stats_;
     std::uint16_t evicted_ = 0;
+    bool track_bbo_ = true;
     ITCH_NO_UNIQUE_ADDRESS OnBbo on_bbo_{};
     ITCH_NO_UNIQUE_ADDRESS OnTrade on_trade_{};
 };

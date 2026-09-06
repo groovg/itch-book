@@ -277,6 +277,7 @@ class Session {
             else if (t == "luld") luld_on_ = true;
             else throw std::invalid_argument("unknown table " + t);
         }
+        mgr_.track_bbo(bbo_on_);
         mpids_.emplace_back();
         for (std::string& w : wanted_) w.resize(8, ' ');
     }
@@ -511,9 +512,11 @@ class Session {
     }
 
     Resting resting(std::uint64_t ref, std::uint16_t fallback_locate) const {
-        if (const itch::Order* o = mgr_.orders().find(ref)) {
-            const itch::Level& lv = mgr_.book(o->locate)->level(o->level);
-            return {o->locate, o->buy ? 'B' : 'S', o->buy ? lv.key : -lv.key, o->qty, true};
+        if (messages_on_ || depth_) {
+            if (const itch::Order* o = mgr_.orders().find(ref)) {
+                const itch::Level& lv = mgr_.book(o->locate)->level(o->level);
+                return {o->locate, o->buy ? 'B' : 'S', o->buy ? lv.key : -lv.key, o->qty, true};
+            }
         }
         return {fallback_locate, 'N', 0, 0, false};
     }

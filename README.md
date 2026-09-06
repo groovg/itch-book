@@ -332,6 +332,10 @@ floats, `from_raw` costs nothing.
   (`trading_state(locate)`), but books are deliberately not gated on it: Nasdaq keeps
   order maintenance flowing during halts, so a handler that stops applying messages on
   `H` resumes with a corrupt book.
+- Top-of-book tracking (the `OnBbo` sink) compares the touch after every book event;
+  `track_bbo(false)` turns that off at runtime for a manager that was instantiated with a
+  sink but does not need it for a given run, and turning it back on resets the remembered
+  tops so the next change on every book is reported.
 
 Fault handling: unknown refs are counted and ignored, duplicate adds replace the stale
 order, over-sized executes clamp, zero-share or zero-price messages are rejected. Each
@@ -352,7 +356,7 @@ differential testing.
   deterministic mutation test (bit flips + truncations over a synthetic feed) runs in the
   regular suite. The framing layer never reads outside the buffer by construction; decode
   only happens after the length check.
-- Python: 71 pytest cases over hand-computed rows for every table, chunk splits down to a
+- Python: 75 pytest cases over hand-computed rows for every table, chunk splits down to a
   single byte, truncated and multi-member gzip, the CLI end to end against a local HTTP
   server for `fetch`; the abi3 wheel is audited with `abi3audit` in CI.
 - CI: GCC, Clang, ASan+UBSan, fuzz, and the Python wheel on Linux and Windows, all on
@@ -397,22 +401,34 @@ Machine: AMD Ryzen 9 9950X3D (Zen 5), Windows 11, single thread, no core isolati
 
 ### Python, end to end
 
-The 2019-12-30 NASDAQ day (3.5 GB gz, 268.7M messages), `bbo` + `trades`:
+The 2019-12-30 NASDAQ day (3.5 GB gz, 268.7M messages):
 
 | stage | wall | rate |
 |---|---|---|
 | gunzip only (Python zlib) | 19.9 s | 8.25 GB out |
-| + parse and apply, no output | 35.4 s | 7.6 M msg/s |
-| `itch2parquet convert` (adds Arrow + zstd write, 1.9 GB, on its own thread) | 45.1 s | 6.0 M msg/s |
-| same with the input md5 pass | 49.3 s | 5.5 M msg/s |
+| `itch2parquet verify` (parse and apply, no table requested) | 25.4 s | 10.6 M msg/s |
+| `bbo` batches (top-of-book tracking and columns on) | 32.0 s | 8.4 M msg/s |
+| `itch2parquet convert` bbo + trades (adds Arrow + zstd write, 1.9 GB, on its own thread) | 39 to 43 s over four runs, with and without md5 | 6.4 M msg/s |
 
-Where the time goes: gunzip runs on the reader thread and is hidden; the consumer thread
-spends about 30 s in the C++ session (parse, book apply, column building) and 3 s in numpy
-post-processing; Arrow conversion and the zstd write overlap on the writer thread. The
-same core driven directly from C++ on the uncompressed day in RAM runs at 15 to 17 M msg/s
-(the table below), so the Python session layer costs about 1.5x over the bare core; the
-compiler is not the difference (clang, which builds the wheels, and GCC are within 10% of
-each other on this loop).
+Where the time goes: gunzip runs on the reader thread and is hidden. With no table
+requested the consumer thread spends 25 s in the C++ session against 18 s for the bare core
+driven from C++ on the uncompressed day in RAM with the same compiler (clang-cl; /O2 and -O3
+measure the same); that 1.4x goes to the session's per-message bookkeeping, the handler
+indirection and the chunked feed, of which only the item below was profiled. Tracking the
+top of book and filling the `bbo` columns adds 6.6 s and numpy post-processing 3 s. Two
+costs were removed in 0.2.1 after profiling with perf: a second order-index lookup on every
+execute, cancel, delete and replace that only the `messages` and `depth` tables need (17%
+of the session's samples on a machine where it misses cache; skipped now unless one of
+them is on), and top-of-book tracking when no `bbo` table was asked for.
+
+The same day on a netcup RS 2000 (EPYC 9645 KVM, 8 dedicated cores at 2.0 GHz, 16 GB, no
+V-Cache, Ubuntu 24.04, GCC 13): bare core pooled 4.6 M msg/s, flat hash 4.3, `unordered_map`
+2.2, naive 1.3 (the inline variant needs more than 16 GB and was not run); `verify` 69 s,
+`convert` 97 to 101 s. Against the 9950X3D that is 3.2x on the bare core with the same
+compiler (14.8 vs 4.6), 2.7x on `verify` and 2.4x on `convert`; clock (2.0 vs 5.x GHz),
+memory and cache all differ between the two machines and were not separated. The ranking of
+the store variants is the same on both, but the spreads collapse on the VM (pooled over
+flat hash 1.07x there against 1.8x here).
 
 On the same file and machine: `ml4t/itch-parser` (Rust, writes all 21 message types to
 5.79 GB of Parquet, a heavier job than the two tables above) finishes in 106 s
@@ -445,7 +461,7 @@ minus the input buffer):
 
 Where the factors come from. Replacing `std::map` levels with the sorted vector is ~1.6×
 (touch-local scans instead of pointer chasing). Replacing the hash ref-index with paged
-direct indexing is another ~3×: one arithmetic dereference, no hashing, no probe chains,
+direct indexing is another ~3× on the 9950X3D: one arithmetic dereference, no hashing, no probe chains,
 no rehash stalls, and near-monotonic refs keep the hot pages cached. The flat hash
 (fibonacci hashing, linear probing, backward-shift deletion) isolates how much of the
 `unordered_map` cost is the container itself: dropping per-node allocation and

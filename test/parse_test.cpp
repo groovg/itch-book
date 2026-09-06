@@ -294,6 +294,28 @@ void decode_all_types() {
     CHECK(h.collar->hdr.timestamp == 34200'000'000'016ull);
 }
 
+void manager_track_bbo_switch() {
+    std::vector<std::byte> adds;
+    enc::stock_directory(adds, 3, 1, "TEST", 100);
+    enc::add_order(adds, 3, 2, 900, 'B', 100, "TEST", 500'000);
+    enc::add_order(adds, 3, 3, 901, 'S', 80, "TEST", 510'000);
+    std::vector<std::byte> del;
+    enc::order_delete(del, 3, 4, 901);
+
+    int calls = 0;
+    auto sink = [&calls](std::uint16_t, const Bbo&) { ++calls; };
+    BookManager<decltype(sink)> mgr(sink);
+    mgr.track_bbo(false);
+    parse(adds, mgr);
+    CHECK(calls == 0);
+    CHECK(mgr.bbo(3).has_bid && mgr.bbo(3).has_ask);
+
+    mgr.track_bbo(true);
+    parse(del, mgr);
+    CHECK(calls == 1);
+    CHECK(mgr.bbo(3).has_bid && !mgr.bbo(3).has_ask);
+}
+
 void manager_trading_state_and_prints() {
     std::vector<std::byte> halted;
     enc::stock_directory(halted, 3, 1, "TEST", 100);
@@ -411,6 +433,7 @@ int main() {
     scan_truncated_tail();
     scan_unknown_and_malformed();
     decode_all_types();
+    manager_track_bbo_switch();
     manager_trading_state_and_prints();
     mutation_robustness();
     partial_handler_compiles();
