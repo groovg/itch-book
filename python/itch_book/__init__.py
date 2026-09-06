@@ -42,7 +42,7 @@ def to_polars(table: dict):
     import polars as pl
 
     df = pl.DataFrame(table)
-    casts = [pl.col(c).cast(pl.Utf8) for c in CHAR_COLUMNS if c in df.columns]
+    casts = [pl.col(c).cast(pl.Utf8) for c in df.columns if df[c].dtype == pl.Binary]
     if "ts_event" in df.columns:
         casts.append(pl.col("ts_event").cast(pl.Datetime("ns", "UTC")))
     return df.with_columns(casts) if casts else df

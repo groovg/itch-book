@@ -20,8 +20,11 @@ from itch_stream import (
     broken_trade,
     cross_trade,
     noii,
+    operational_halt,
+    order_cancel,
     order_delete,
     order_executed,
+    order_replace,
     stock_directory,
     system_event,
     trade,
@@ -80,11 +83,14 @@ def test_convert_default_tables(day, tmp_path, capsys):
     names = bbo_file.schema_arrow.names
     assert [names[s.column_index] for s in sorting] == ["ts_event", "seq"]
 
-    assert pq.ParquetFile(out / "trades.parquet").num_row_groups == 2
-    trades = pq.read_table(out / "trades.parquet")
+    trades_file = pq.ParquetFile(out / "trades.parquet")
+    assert trades_file.num_row_groups == 1
+    assert [names[s.column_index] for s in trades_file.metadata.row_group(0).sorting_columns] == ["ts_event", "seq"]
+    trades = trades_file.read()
     assert trades.column("kind").to_pylist() == ["E", "P", "Q", "B"]
     assert trades.column("broken").to_pylist() == [False, False, True, False]
     assert trades.column("symbol").to_pylist() == ["AAPL", "MSFT", "AAPL", "AAPL"]
+    assert not (out / "trades.parquet.part").exists()
 
     meta = pq.read_metadata(out / "trades.parquet").metadata
     assert meta[b"itch_book.schema"] == b"1"
@@ -122,6 +128,74 @@ def test_convert_auction_and_halt_tables(tmp_path):
     n = pq.read_table(out / "noii.parquet")
     assert n.column("ref_px").to_pylist() == [185.77] and n.column("direction").to_pylist() == ["B"]
     assert n.schema.field("paired").type == pa.uint64()
+
+
+def test_lobster_export(tmp_path, capsys):
+    p = tmp_path / "12302019.NASDAQ_ITCH50"
+    p.write_bytes(b"".join([
+        system_event(T0, b"O"),
+        stock_directory(1, T0, "AAPL"),
+        stock_directory(2, T0, "MSFT"),
+        add_order(1, T0 - 5 * NS, ref=9, side="B", shares=10, stock="AAPL", price=990_000),
+        add_order(1, T0 + 1 * NS, ref=10, side="B", shares=100, stock="AAPL", price=1_000_000),
+        add_order(1, T0 + 2 * NS, ref=11, side="S", shares=50, stock="AAPL", price=1_005_000),
+        order_executed(1, T0 + 3 * NS, ref=11, shares=20, match=1),
+        order_cancel(1, T0 + 4 * NS, ref=10, shares=30),
+        order_replace(1, T0 + 5 * NS, old_ref=10, new_ref=12, shares=60, price=999_000),
+        add_order(2, T0 + 5 * NS + 1, ref=20, side="S", shares=7, stock="MSFT", price=1_500_000),
+        order_delete(1, T0 + 6 * NS, ref=12),
+        trade(1, T0 + 7 * NS, ref=0, side="B", shares=5, stock="AAPL", price=1_001_000, match=3),
+        trading_action(1, T0 + 8 * NS, "AAPL", "H", "LUDP"),
+        order_delete(1, T0 + 9 * NS, ref=999),
+        stock_directory(3, T0 + 9 * NS, "ZZZ"),
+        operational_halt(3, T0 + 9 * NS + 1, "ZZZ", "Q", "H"),
+        system_event(T0 + 10 * NS, b"C"),
+    ]))
+    out = tmp_path / "lob"
+    assert cli.main(["lobster", str(p), str(out), "--symbols", "aapl,zzz", "--levels", "2"]) == 0
+    assert "2 symbols" in capsys.readouterr().out
+    assert files(out) == [
+        "AAPL_2019-12-30_34200000_57600000_message_2.csv", "AAPL_2019-12-30_34200000_57600000_orderbook_2.csv",
+        "ZZZ_2019-12-30_34200000_57600000_message_2.csv", "ZZZ_2019-12-30_34200000_57600000_orderbook_2.csv",
+    ]
+    zzz = (out / files(out)[2]).read_text().splitlines()
+    assert zzz == ["34209.000000001,7,0,0,-1,-1"]
+    assert (out / files(out)[3]).read_text().splitlines() == ["9999999999,0,-9999999999,0,9999999999,0,-9999999999,0"]
+    msg = [line.split(",") for line in (out / files(out)[0]).read_text().splitlines()]
+    assert [(r[1], r[2], r[3], r[4], r[5]) for r in msg] == [
+        ("1", "10", "100", "1000000", "1"),
+        ("1", "11", "50", "1005000", "-1"),
+        ("4", "11", "20", "1005000", "-1"),
+        ("2", "10", "30", "1000000", "1"),
+        ("3", "10", "70", "1000000", "1"),
+        ("1", "12", "60", "999000", "1"),
+        ("3", "12", "60", "999000", "1"),
+        ("5", "0", "5", "1001000", "1"),
+        ("7", "0", "0", "-1", "-1"),
+    ]
+    assert msg[0][0] == "34201" and msg[2][0] == "34203"
+    book = [line.split(",") for line in (out / files(out)[1]).read_text().splitlines()]
+    assert len(book) == 9
+    assert book[0] == ["9999999999", "0", "1000000", "100", "9999999999", "0", "990000", "10"]
+    assert book[1][:4] == ["1005000", "50", "1000000", "100"]
+    assert book[3][:4] == ["1005000", "30", "1000000", "70"]
+    assert book[4][:4] == ["1005000", "30", "999000", "60"] and book[5] == book[4]
+    assert book[6][:4] == ["1005000", "30", "990000", "10"] and book[6][4:] == ["9999999999", "0", "-9999999999", "0"]
+    assert book[7] == book[6] and book[8] == book[6]
+
+    assert cli.main(["lobster", str(p), str(out)]) == 2
+    assert cli.main(["lobster", str(p), str(out), "--symbols", "ZZZZ"]) == 1
+
+
+def test_writer_thread_error_leaves_nothing_behind(day, tmp_path, monkeypatch, capsys):
+    def boom(table, lookup):
+        raise ValueError("arrow conversion failed")
+
+    monkeypatch.setattr(cli, "to_arrow", boom)
+    out = tmp_path / "out"
+    assert cli.main(["convert", day, str(out)]) == 2
+    assert "arrow conversion failed" in capsys.readouterr().err
+    assert files(out) == []
 
 
 def test_convert_messages_with_symbol_filter_and_date_override(day, tmp_path, capsys):

@@ -3,8 +3,10 @@ import datetime as dt
 import hashlib
 import json
 import os
+import queue
 import re
 import sys
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -67,17 +69,11 @@ class Names:
         if not symbols["locate"]:
             return
         self._grow(max(symbols["locate"]))
+        self.lookup = self.lookup.copy()
         for loc, name in zip(symbols["locate"], symbols["symbol"]):
             self.lookup[loc] = name
         for k, v in symbols.items():
             self.rows.setdefault(k, []).extend(v)
-
-    def column(self, locate: np.ndarray):
-        import pyarrow as pa
-
-        if len(locate):
-            self._grow(int(locate.max()))
-        return pa.DictionaryArray.from_arrays(pa.array(locate.astype(np.int32)), pa.array(self.lookup))
 
     def table(self):
         import pyarrow as pa
@@ -89,7 +85,7 @@ class Names:
         return t
 
 
-def to_arrow(table: dict[str, np.ndarray], names: Names):
+def to_arrow(table: dict[str, np.ndarray], lookup: np.ndarray):
     import pyarrow as pa
 
     cols = {}
@@ -101,8 +97,20 @@ def to_arrow(table: dict[str, np.ndarray], names: Names):
         else:
             cols[name] = pa.array(arr)
         if name == "locate":
-            cols["symbol"] = names.column(arr)
+            top = int(arr.max()) if len(arr) else 0
+            if top >= len(lookup):
+                grown = np.full(top + 1, "", dtype="U8")
+                grown[: len(lookup)] = lookup
+                lookup = grown
+            cols["symbol"] = pa.DictionaryArray.from_arrays(pa.array(arr.astype(np.int32)), pa.array(lookup))
     return pa.table(cols)
+
+
+def sorting_for(schema):
+    import pyarrow.parquet as pq
+
+    names = schema.names
+    return [pq.SortingColumn(names.index(c)) for c in ("ts_event", "seq") if c in names] or None
 
 
 class Writers:
@@ -110,6 +118,10 @@ class Writers:
         self.out = out
         self.writers = {}
         self.rows: dict[str, int] = {}
+        self.error: BaseException | None = None
+        self.queue: queue.Queue = queue.Queue(maxsize=2)
+        self.thread: threading.Thread | None = threading.Thread(target=self._run, daemon=True)
+        self.thread.start()
 
     def part(self, table: str) -> Path:
         return self.out / f"{table}.parquet.part"
@@ -117,21 +129,44 @@ class Writers:
     def final(self, table: str) -> Path:
         return self.out / f"{table}.parquet"
 
-    def write(self, table: str, arrow) -> None:
+    def write(self, table: str, payload, lookup: np.ndarray | None = None) -> None:
+        if self.error:
+            raise self.error
+        self.queue.put((table, payload, lookup))
+
+    def _run(self) -> None:
+        while (item := self.queue.get()) is not None:
+            if self.error is None:
+                try:
+                    self._write(*item)
+                except BaseException as e:  # noqa: BLE001
+                    self.error = e
+
+    def _write(self, table: str, payload, lookup) -> None:
+        import pyarrow as pa
         import pyarrow.parquet as pq
 
+        arrow = payload if isinstance(payload, pa.Table) else to_arrow(payload, lookup)
         w = self.writers.get(table)
         if w is None:
-            names = arrow.schema.names
-            sorting = [pq.SortingColumn(names.index(c)) for c in ("ts_event", "seq") if c in names]
-            w = pq.ParquetWriter(self.part(table), arrow.schema, compression="zstd", sorting_columns=sorting or None)
+            w = pq.ParquetWriter(self.part(table), arrow.schema, compression="zstd",
+                                 sorting_columns=sorting_for(arrow.schema))
             self.writers[table] = w
             self.rows[table] = 0
         if arrow.num_rows:
             w.write_table(arrow, row_group_size=arrow.num_rows)
             self.rows[table] += arrow.num_rows
 
+    def _join(self) -> None:
+        if self.thread is not None:
+            self.queue.put(None)
+            self.thread.join()
+            self.thread = None
+
     def close(self, metadata: dict[str, str]) -> None:
+        self._join()
+        if self.error:
+            raise self.error
         for table, w in self.writers.items():
             w.add_key_value_metadata(metadata)
             w.close()
@@ -139,12 +174,40 @@ class Writers:
         self.writers.clear()
 
     def abort(self) -> None:
+        self.error = self.error or RuntimeError("aborted")
+        self._join()
         for table, w in self.writers.items():
             try:
                 w.close()
             finally:
                 self.part(table).unlink(missing_ok=True)
         self.writers.clear()
+
+
+def flag_broken(path: Path, voided: np.ndarray, metadata: dict[str, str]) -> None:
+    import pyarrow as pa
+    import pyarrow.compute as pc
+    import pyarrow.parquet as pq
+
+    src = pq.ParquetFile(path)
+    part = path.with_name(path.name + ".part")
+    try:
+        with pq.ParquetWriter(part, src.schema_arrow, compression="zstd",
+                              sorting_columns=sorting_for(src.schema_arrow)) as w:
+            for i in range(src.metadata.num_row_groups):
+                rg = src.read_row_group(i)
+                match = rg.column("match_number").to_numpy()
+                is_b = pc.equal(rg.column("kind"), "B").to_numpy(zero_copy_only=False)
+                broken = np.isin(match, voided) & ~is_b
+                rg = rg.set_column(rg.schema.get_field_index("broken"), "broken", pa.array(broken))
+                w.write_table(rg, row_group_size=rg.num_rows)
+            w.add_key_value_metadata(metadata)
+    except BaseException:
+        part.unlink(missing_ok=True)
+        raise
+    finally:
+        src.close()
+    os.replace(part, path)
 
 
 def concat(parts: list[dict[str, np.ndarray]]) -> dict[str, np.ndarray]:
@@ -195,8 +258,8 @@ def convert(args) -> int:
     feed = Feed(args.file, date=date, price_type=args.price_type)
     names = Names()
     writers = Writers(out)
-    trades_parts: list[dict] = []
     events_parts: list[dict] = []
+    voided: list[np.ndarray] = []
     try:
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
@@ -205,20 +268,14 @@ def convert(args) -> int:
                 names.update(batch.symbols)
                 events_parts.append(batch.system_events)
                 for t in tables:
+                    cols = getattr(batch, t)
                     if t == "trades":
-                        trades_parts.append(batch.trades)
-                    else:
-                        writers.write(t, to_arrow(getattr(batch, t), names))
+                        voided.append(cols["match_number"][cols["kind"] == b"B"])
+                        cols["broken"] = np.zeros(len(cols["seq"]), dtype=np.bool_)
+                    writers.write(t, cols, names.lookup)
         for w in caught:
             eprint(w.message)
-        if "trades" in tables:
-            trades = concat(trades_parts)
-            voided = trades["match_number"][trades["kind"] == b"B"]
-            trades["broken"] = np.isin(trades["match_number"], voided) & (trades["kind"] != b"B")
-            n = len(trades["seq"])
-            for start in range(0, max(n, 1), args.rows):
-                writers.write("trades", to_arrow({k: v[start:start + args.rows] for k, v in trades.items()}, names))
-        writers.write("system_events", to_arrow(concat(events_parts), names))
+        writers.write("system_events", concat(events_parts), names.lookup)
         if names.rows:
             writers.write("symbols", names.table())
         stats = feed.stats
@@ -241,6 +298,9 @@ def convert(args) -> int:
         if "depth" in tables:
             metadata["itch_book.depth"] = str(args.depth)
         writers.close(metadata)
+        voids = np.concatenate(voided) if voided else np.zeros(0, dtype=np.uint64)
+        if voids.size:
+            flag_broken(writers.final("trades"), voids, metadata)
     except BaseException:
         writers.abort()
         raise
@@ -251,6 +311,41 @@ def convert(args) -> int:
     print(f"{stats['messages']:,} messages in {elapsed:.1f}s; missing_ref={stats['missing_ref']} "
           f"crossed_books={stats['crossed_books']} last_event={stats['last_event']}")
     return 0
+
+
+def lobster(args) -> int:
+    try:
+        import pyarrow  # noqa: F401
+    except ImportError:
+        eprint("itch2parquet lobster needs pyarrow: pip install 'itch-book[cli]'")
+        return 2
+    from .lobster import export
+
+    symbols = split(args.symbols, (), upper=True)
+    if not symbols:
+        eprint("--symbols is required: one pair of files is written per symbol")
+        return 2
+    if not 1 <= args.levels <= 50:
+        eprint("--levels must be between 1 and 50")
+        return 2
+    if args.date:
+        date = dt.date.fromisoformat(args.date)
+    else:
+        date = session_date(args.file)
+        if date is None:
+            eprint(f"cannot infer the session date from {args.file!r}; pass --date YYYY-MM-DD")
+            return 2
+    Path(args.out).mkdir(parents=True, exist_ok=True)
+    t0 = time.perf_counter()
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        written = export(args.file, args.out, symbols, levels=args.levels, date=date)
+    for w in caught:
+        eprint(w.message)
+    for name, rows in written:
+        print(f"{rows:>12,} rows  {name}")
+    print(f"{len(written) // 2} symbols in {time.perf_counter() - t0:.1f}s")
+    return 0 if written else 1
 
 
 def verify(args) -> int:
@@ -385,7 +480,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--version", action="version", version=f"itch-book {__version__}")
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    c = sub.add_parser("convert", help="write bbo/trades/messages/depth tables as Parquet")
+    c = sub.add_parser("convert", help="write the row tables as Parquet, one file per table")
     c.add_argument("file", help="ITCH 5.0 day file, raw or gzipped")
     c.add_argument("out", help="output directory (existing table files there are replaced)")
     c.add_argument("--tables", help=f"comma-separated subset of {','.join(ROW_TABLES)} (default bbo,trades)")
@@ -398,6 +493,14 @@ def main(argv: list[str] | None = None) -> int:
                    help="approximate rows per Parquet row group; batches are cut on input chunks (default 1e6)")
     c.add_argument("--no-md5", action="store_true", help="skip hashing the input into the metadata")
     c.set_defaults(run=convert)
+
+    lb = sub.add_parser("lobster", help="write LOBSTER message and orderbook csv files for a few symbols")
+    lb.add_argument("file", help="ITCH 5.0 day file, raw or gzipped")
+    lb.add_argument("out", help="output directory")
+    lb.add_argument("--symbols", help="comma-separated symbols, one pair of files each")
+    lb.add_argument("--levels", type=int, default=10, help="book levels per side, 1-50 (default 10)")
+    lb.add_argument("--date", help="session date YYYY-MM-DD when the filename does not carry it")
+    lb.set_defaults(run=lobster)
 
     v = sub.add_parser("verify", help="replay a file and check the book invariants")
     v.add_argument("file", help="ITCH 5.0 day file, raw or gzipped")

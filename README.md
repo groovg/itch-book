@@ -78,6 +78,7 @@ itch2parquet fetch 20190730.BX_ITCH_50.gz --dir data # resumes a partial downloa
 itch2parquet verify data/20190730.BX_ITCH_50.gz     # replays the day and prints the book invariants
 itch2parquet convert data/20190730.BX_ITCH_50.gz out # bbo + trades by default
 itch2parquet convert FILE out --tables messages,depth --symbols AAPL,MSFT --depth 5 --price-type fixed
+itch2parquet lobster FILE out --symbols AAPL,MSFT --levels 10   # LOBSTER message + orderbook csv per symbol
 ```
 
 C++:
@@ -193,10 +194,28 @@ from the filename (both emi naming schemes) and is printed when inferred; `--dat
 it. The BX day above converts to `bbo` (267 MB) + `trades` (15 MB) in 6.6 s including the
 md5 pass.
 
+### LOBSTER export
+
+`itch2parquet lobster FILE out --symbols AAPL --levels 10` writes the two-file layout used by
+[LOBSTER](https://lobsterdata.com/info/DataStructure.php) and the academic order-book
+literature: `AAPL_2019-12-30_34200000_57600000_message_10.csv` (time in seconds after
+midnight, event type, order id, size, price ×10000, direction) and the matching
+`_orderbook_10.csv` (ask price, ask size, bid price, bid size per level, empty levels as
+9999999999 / -9999999999 with size 0), one orderbook row per message row, no headers, regular
+session only (09:30 to 16:00). Event types: 1 submission (A/F), 2 partial cancel (X), 3 deletion
+(D), 4 execution of a visible order (E and C, at the resting price for E and the message price
+for C), 5 execution of a hidden order (P; NASDAQ sends `B` in that message's side field, so
+direction is 1), 6 cross trade (Q, direction -1), 7 halt (H and h; price -1 halted or paused, 0
+quotation only, 1 trading, direction -1). A replace (U) becomes a deletion of the old order
+followed by a submission of the new one, and both rows carry the book state after the whole
+replace. Messages with an unknown order reference are left out.
+
 ### Notes and limits
 
-- `trades` is held in memory for the whole day to compute `broken` (about 50 bytes per
-  print: ~100 MB for BX, ~1 GB for a NASDAQ day); the other tables stream.
+- Every table streams; Arrow conversion and the zstd write run on their own thread behind a
+  two-batch queue. `broken` is filled in by a second pass over `trades.parquet`, row group by
+  row group, and only when the day carried a `B` message at all (the three days under
+  Validation carry none).
 - Unsigned columns are stored with Parquet unsigned annotations, which polars, pyarrow,
   duckdb and pandas read directly and some older JVM readers do not.
 - There is no per-symbol partitioning; filter the tables afterwards.
