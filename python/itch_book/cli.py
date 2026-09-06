@@ -19,7 +19,7 @@ from ._dates import session_date
 
 EMI = "https://emi.nasdaq.com/ITCH/"
 EMI_DIRS = ("Nasdaq ITCH/", "Nasdaq BX ITCH/", "Nasdaq PSX ITCH/")
-ROW_TABLES = ("bbo", "trades", "messages", "depth")
+ROW_TABLES = ("bbo", "trades", "messages", "depth", "noii", "halts", "reg_sho", "luld")
 DEFAULT_TABLES = ("bbo", "trades")
 SCHEMA_VERSION = "1"
 CHUNK = 8 << 20
@@ -45,7 +45,11 @@ def file_md5(path: str) -> str:
 def strings(arr: np.ndarray):
     import pyarrow as pa
 
-    return pa.Array.from_buffers(pa.binary(1), len(arr), [None, pa.py_buffer(arr)]).cast(pa.string())
+    import pyarrow.compute as pc
+
+    width = arr.dtype.itemsize
+    out = pa.Array.from_buffers(pa.binary(width), len(arr), [None, pa.py_buffer(arr)]).cast(pa.string())
+    return out if width == 1 else pc.utf8_rtrim_whitespace(out)
 
 
 class Names:

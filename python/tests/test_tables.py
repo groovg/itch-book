@@ -13,14 +13,19 @@ from itch_stream import (
     add_order_mpid,
     broken_trade,
     cross_trade,
+    luld_collar,
+    noii,
+    operational_halt,
     order_cancel,
     order_delete,
     order_executed,
     order_executed_price,
     order_replace,
+    reg_sho,
     stock_directory,
     system_event,
     trade,
+    trading_action,
 )
 
 NS = 1_000_000_000
@@ -110,6 +115,53 @@ def test_system_events_table(feed):
     ev = gather(feed, ("system_events",))["system_events"]
     assert chars(ev["event"]) == ["O", "C"]
     assert ev["seq"].tolist() == [1, 15]
+
+
+def test_auction_and_halt_tables(tmp_path):
+    data = b"".join([
+        system_event(T0, b"O"),
+        stock_directory(1, T0, "AAPL"),
+        stock_directory(2, T0, "MSFT"),
+        trading_action(1, T0 + 1 * NS, "AAPL", "H", "LUDP"),
+        noii(1, T0 + 2 * NS, 5000, 1200, "B", "AAPL", 1_858_000, 1_857_500, 1_857_700, "O", "L"),
+        reg_sho(1, T0 + 3 * NS, "AAPL", "1"),
+        operational_halt(1, T0 + 4 * NS, "AAPL", "Q", "T"),
+        luld_collar(1, T0 + 5 * NS, "AAPL", 1_857_000, 1_950_000, 1_764_000, 2),
+        noii(2, T0 + 6 * NS, 0, 0, "N", "MSFT", 0, 0, 1_500_000, "C", " "),
+        add_order(1, T0 + 7 * NS, ref=10, side="B", shares=100, stock="AAPL", price=1_857_000),
+        system_event(T0 + 8 * NS, b"C"),
+    ])
+    f = ib.open(write(tmp_path, data), chunk_bytes=7)
+    t = gather(f, ("noii", "halts", "reg_sho", "luld", "bbo"))
+    m = midnight_ns(dt.date(2019, 12, 30))
+
+    n = t["noii"]
+    assert n["seq"].tolist() == [5, 9] and n["locate"].tolist() == [1, 2]
+    assert n["ts_event"].tolist() == [m + T0 + 2 * NS, m + T0 + 6 * NS]
+    assert n["paired"].tolist() == [5000, 0] and n["imbalance"].tolist() == [1200, 0]
+    assert chars(n["direction"]) == ["B", "N"] and chars(n["cross_type"]) == ["O", "C"]
+    assert chars(n["variation"]) == ["L", " "]
+    assert n["far_px"].tolist()[0] == 185.8 and n["near_px"].tolist()[0] == 185.75
+    assert n["ref_px"].tolist() == [185.77, 150.0]
+    assert math.isnan(n["far_px"][1]) and math.isnan(n["near_px"][1])
+
+    h = t["halts"]
+    assert h["seq"].tolist() == [4, 7] and chars(h["kind"]) == ["H", "h"]
+    assert chars(h["state"]) == ["H", "T"] and chars(h["market"]) == ["N", "Q"]
+    assert [x.decode() for x in h["reason"].tolist()] == ["LUDP", "    "]
+
+    r = t["reg_sho"]
+    assert r["seq"].tolist() == [6] and chars(r["action"]) == ["1"]
+
+    c = t["luld"]
+    assert c["seq"].tolist() == [8] and c["extension"].tolist() == [2]
+    assert (c["ref_px"].tolist(), c["upper_px"].tolist(), c["lower_px"].tolist()) == ([185.7], [195.0], [176.4])
+
+    assert t["bbo"]["seq"].tolist() == [10]
+    assert f.stats["messages"] == 11 and f.stats["unknown"] == 0
+
+    only = gather(ib.open(write(tmp_path, data)), ("noii",))
+    assert only["noii"]["seq"].tolist() == [5, 9]
 
 
 def test_tables_are_independent_and_bbo_unchanged(feed):

@@ -153,6 +153,10 @@ struct Recorder {
     std::optional<TradingAction> action;
     std::optional<CrossTrade> cross;
     std::optional<BrokenTrade> broken;
+    std::optional<Noii> noii;
+    std::optional<RegSho> reg_sho;
+    std::optional<OperationalHalt> op_halt;
+    std::optional<LuldCollar> collar;
 
     void on_system_event(const SystemEvent& m) { sys = m; }
     void on_stock_directory(const StockDirectory& m) { dir = m; }
@@ -166,6 +170,10 @@ struct Recorder {
     void on_trading_action(const TradingAction& m) { action = m; }
     void on_cross(const CrossTrade& m) { cross = m; }
     void on_broken(const BrokenTrade& m) { broken = m; }
+    void on_noii(const Noii& m) { noii = m; }
+    void on_reg_sho(const RegSho& m) { reg_sho = m; }
+    void on_operational_halt(const OperationalHalt& m) { op_halt = m; }
+    void on_luld_collar(const LuldCollar& m) { collar = m; }
 };
 
 void decode_all_types() {
@@ -185,11 +193,16 @@ void decode_all_types() {
     enc::trading_action(buf, 42, 34200'000'000'010ull, "AAPL", 'H', "LUDP");
     enc::cross_trade(buf, 42, 34200'000'000'011ull, 120'000, "AAPL", 1'857'000, 555004, 'O');
     enc::broken_trade(buf, 42, 34200'000'000'012ull, 555003);
+    enc::noii(buf, 42, 34200'000'000'013ull, 5000, 1200, 'B', "AAPL", 1'858'000, 1'857'500,
+              1'857'700, 'O', 'L');
+    enc::reg_sho(buf, 42, 34200'000'000'014ull, "AAPL", '1');
+    enc::operational_halt(buf, 42, 34200'000'000'015ull, "AAPL", 'Q', 'H');
+    enc::luld_collar(buf, 42, 34200'000'000'016ull, "AAPL", 1'857'000, 1'950'000, 1'764'000, 2);
     enc::end_of_session(buf);
 
     Recorder h;
     auto r = parse(buf, h);
-    CHECK(r.messages == 13);
+    CHECK(r.messages == 17);
     CHECK(r.unknown == 0);
     CHECK(r.malformed == 0);
     CHECK(r.end_of_session);
@@ -255,6 +268,30 @@ void decode_all_types() {
 
     CHECK(h.broken && h.broken->match == 555003);
     CHECK(h.broken->hdr.timestamp == 34200'000'000'012ull);
+
+    CHECK(h.noii && h.noii->paired == 5000);
+    CHECK(h.noii->imbalance == 1200);
+    CHECK(h.noii->direction == 'B');
+    CHECK(h.noii->stock.view() == "AAPL");
+    CHECK(h.noii->far_price.raw() == 1'858'000);
+    CHECK(h.noii->near_price.raw() == 1'857'500);
+    CHECK(h.noii->reference_price.raw() == 1'857'700);
+    CHECK(h.noii->cross_type == 'O');
+    CHECK(h.noii->variation == 'L');
+
+    CHECK(h.reg_sho && h.reg_sho->stock.view() == "AAPL");
+    CHECK(h.reg_sho->action == '1');
+
+    CHECK(h.op_halt && h.op_halt->stock.view() == "AAPL");
+    CHECK(h.op_halt->market == 'Q');
+    CHECK(h.op_halt->action == 'H');
+
+    CHECK(h.collar && h.collar->stock.view() == "AAPL");
+    CHECK(h.collar->reference_price.raw() == 1'857'000);
+    CHECK(h.collar->upper.raw() == 1'950'000);
+    CHECK(h.collar->lower.raw() == 1'764'000);
+    CHECK(h.collar->extension == 2);
+    CHECK(h.collar->hdr.timestamp == 34200'000'000'016ull);
 }
 
 void manager_trading_state_and_prints() {

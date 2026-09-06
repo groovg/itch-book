@@ -74,6 +74,30 @@ inline void dispatch(char type, const std::byte* m, H& h) {
             if constexpr (requires { h.on_broken(BrokenTrade::decode(m)); })
                 h.on_broken(BrokenTrade::decode(m));
             break;
+        case 'I':
+            if constexpr (requires { h.on_noii(Noii::decode(m)); })
+                h.on_noii(Noii::decode(m));
+            else if constexpr (requires { h.on_other(type); })
+                h.on_other(type);
+            break;
+        case 'Y':
+            if constexpr (requires { h.on_reg_sho(RegSho::decode(m)); })
+                h.on_reg_sho(RegSho::decode(m));
+            else if constexpr (requires { h.on_other(type); })
+                h.on_other(type);
+            break;
+        case 'h':
+            if constexpr (requires { h.on_operational_halt(OperationalHalt::decode(m)); })
+                h.on_operational_halt(OperationalHalt::decode(m));
+            else if constexpr (requires { h.on_other(type); })
+                h.on_other(type);
+            break;
+        case 'J':
+            if constexpr (requires { h.on_luld_collar(LuldCollar::decode(m)); })
+                h.on_luld_collar(LuldCollar::decode(m));
+            else if constexpr (requires { h.on_other(type); })
+                h.on_other(type);
+            break;
         default:
             if constexpr (requires { h.on_other(type); }) h.on_other(type);
             break;

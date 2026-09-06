@@ -17,7 +17,8 @@ __all__ = ["Feed", "to_polars"]
 __version__ = version("itch-book")
 
 PRICE_SCALE = 10_000
-TABLES = ("bbo", "trades", "messages", "depth", "symbols", "system_events")
+TABLES = ("bbo", "trades", "messages", "depth", "noii", "halts", "reg_sho", "luld", "symbols", "system_events")
+CORE_TABLES = ("bbo", "trades", "messages", "noii", "halts", "reg_sho", "luld")
 SYMBOL_COLUMNS = (
     "locate", "symbol", "market_category", "financial_status", "round_lot_size",
     "round_lots_only", "issue_classification", "issue_subtype", "authenticity",
@@ -28,7 +29,12 @@ TRADE_COLUMNS = ("ts_event", "seq", "locate", "kind", "price", "size", "side", "
 MESSAGE_COLUMNS = ("ts_event", "seq", "locate", "type", "action", "side", "price", "size", "remaining",
                    "printable", "order_id", "old_order_id", "mpid")
 EVENT_COLUMNS = ("ts_event", "seq", "event")
-CHAR_COLUMNS = ("kind", "side", "cross_type", "type", "action", "event")
+NOII_COLUMNS = ("ts_event", "seq", "locate", "paired", "imbalance", "direction", "far_px", "near_px", "ref_px",
+                "cross_type", "variation")
+HALT_COLUMNS = ("ts_event", "seq", "locate", "kind", "state", "reason", "market")
+REG_SHO_COLUMNS = ("ts_event", "seq", "locate", "action")
+LULD_COLUMNS = ("ts_event", "seq", "locate", "ref_px", "upper_px", "lower_px", "extension")
+CHAR_COLUMNS = ("kind", "side", "cross_type", "type", "action", "event", "direction", "variation", "state", "market")
 SMALLEST_FRAME = 21
 
 
@@ -126,7 +132,7 @@ class Feed:
         wanted = sorted({s.upper() for s in symbols})
         if any(len(s) > 8 for s in wanted):
             raise ValueError("ITCH symbols are at most 8 characters")
-        session = Session(bbo="bbo" in tables, trades="trades" in tables, messages="messages" in tables,
+        session = Session(tables=[t for t in CORE_TABLES if t in tables],
                           depth=depth if "depth" in tables else 0, symbols=wanted)
         session.reserve(rows + self.chunk_bytes // SMALLEST_FRAME)
         self._stop = threading.Event()
@@ -192,6 +198,23 @@ class Feed:
                 self._price(cols, name)
             head = ("ts_event", "seq", "locate")
             out["depth"] = {k: cols[k] for k in head} | {k: v for k, v in cols.items() if k not in head}
+        if "noii" in tables:
+            cols = self._common(session.take_noii())
+            for name in ("far_px", "near_px", "ref_px"):
+                self._price(cols, name)
+            out["noii"] = {k: cols[k] for k in NOII_COLUMNS}
+        if "halts" in tables:
+            cols = self._common(session.take_halts())
+            cols["reason"] = cols["reason"].view("S4")
+            out["halts"] = {k: cols[k] for k in HALT_COLUMNS}
+        if "reg_sho" in tables:
+            cols = self._common(session.take_reg_sho())
+            out["reg_sho"] = {k: cols[k] for k in REG_SHO_COLUMNS}
+        if "luld" in tables:
+            cols = self._common(session.take_luld())
+            for name in ("ref_px", "upper_px", "lower_px"):
+                self._price(cols, name)
+            out["luld"] = {k: cols[k] for k in LULD_COLUMNS}
         if "system_events" in tables:
             cols = self._common(session.take_events())
             out["system_events"] = {k: cols[k] for k in EVENT_COLUMNS}

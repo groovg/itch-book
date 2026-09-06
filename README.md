@@ -116,6 +116,10 @@ cut at chunk boundaries.
 | `trades` | E, printable C, P, Q, B | `kind price size side order_id match_number cross_type` |
 | `messages` | A, F, E, C, X, D, U | `type action side price size remaining printable order_id old_order_id mpid` |
 | `depth` | change within the top N levels of either side (`depth=10`) | `bid_px_00 bid_sz_00 bid_ct_00 ask_px_00 … ask_ct_09` |
+| `noii` | I (net order imbalance indicator) | `paired imbalance direction far_px near_px ref_px cross_type variation` |
+| `halts` | H (trading action) and h (operational halt) | `kind state reason market` |
+| `reg_sho` | Y | `action` |
+| `luld` | J (LULD auction collar) | `ref_px upper_px lower_px extension` |
 | `system_events` | S | `event` |
 | `symbols` | R | the stock directory fields |
 
@@ -148,6 +152,15 @@ day's directory (a miss is a warning). `depth` rows carry no trigger columns; jo
 `messages` on `seq` for the event that produced a snapshot. On the BX day 99.8% of
 book-changing messages touch the top ten levels, so `depth` at N=10 is effectively one row
 per event there. `symbols` is the stock directory keyed by `locate`.
+
+`noii` is the imbalance feed NASDAQ disseminates every second during the opening and
+closing cross windows (and around halts and IPOs): paired and imbalance shares, the far,
+near and current reference prices (NaN when not disseminated) and the cross it refers to.
+`halts` merges the two halt message types: `kind` is `H` (stock trading action, `state`
+T/H/P/Q with the four-letter `reason`) or `h` (operational halt, `state` H/T for the
+`market` Q/B/X). `reg_sho` carries the Reg SHO action (0/1/2) and `luld` the LULD auction
+collar reference, upper and lower prices with the extension counter. The other
+administrative types (L, V, W, K, N, O) are counted in `feed.stats` and not decoded.
 
 BX 2019-07-30 (391 MB gzip, 28.7M messages, 8,849 symbols), gunzip included: `bbo` alone
 2.3 s (19.1M rows), the five row tables without `depth` 2.5 s (`messages` 23.8M rows,
@@ -194,8 +207,11 @@ md5 pass.
 
 ### Handlers and streaming
 
-Handlers are plain structs; implement only the callbacks you need. Messages you skip cost
-one length lookup, nothing is decoded for them:
+Handlers are plain structs; implement only the callbacks you need (`on_add`, `on_execute`,
+`on_execute_price`, `on_cancel`, `on_delete`, `on_replace`, `on_trade`, `on_cross`,
+`on_broken`, `on_system_event`, `on_stock_directory`, `on_trading_action`,
+`on_operational_halt`, `on_noii`, `on_reg_sho`, `on_luld_collar`, and `on_other(char)` for
+everything else). Messages you skip cost one length lookup, nothing is decoded for them:
 
 ```cpp
 struct Trades {
@@ -440,9 +456,10 @@ checks on at all times.
 - Replay, not a live feed handler. `StreamParser` reassembles frames split across
   arbitrary chunk boundaries, but there is no MoldUDP64/SoupBinTCP session layer on top,
   no A/B feed arbitration, no gap or retransmission requests.
-- Book-affecting messages, trades and trade voids (`P`/`Q`/`B`) and trading actions (`H`)
-  are decoded; NOII, RegSHO, LULD and the other administrative types are framed and
-  counted but not decoded.
+- Book-affecting messages, trades and trade voids (`P`/`Q`/`B`), trading actions and
+  operational halts (`H`/`h`), NOII (`I`), Reg SHO (`Y`) and LULD collars (`J`) are
+  decoded; market participant positions, MWCB, IPO quoting, RPII and direct listing
+  messages (`L`/`V`/`W`/`K`/`N`/`O`) are framed and counted but not decoded.
 - Order references are trusted to be locate-consistent (the order's stored locate wins
   over the message header on E/X/D/U, so a corrupt feed cannot cross-corrupt books).
 - Single-threaded by design; shard symbols across instances above the library if needed.

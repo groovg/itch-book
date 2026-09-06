@@ -169,6 +169,39 @@ inline void broken_trade(std::vector<std::byte>& out, std::uint16_t locate, std:
     msg(out, 'B', locate, ts).u64(match).done();
 }
 
+inline void noii(std::vector<std::byte>& out, std::uint16_t locate, std::uint64_t ts,
+                 std::uint64_t paired, std::uint64_t imbalance, char direction,
+                 std::string_view stock, std::uint32_t far, std::uint32_t near,
+                 std::uint32_t reference, char cross_type, char variation) {
+    msg(out, 'I', locate, ts)
+        .u64(paired)
+        .u64(imbalance)
+        .ch(direction)
+        .str(stock, 8)
+        .u32(far)
+        .u32(near)
+        .u32(reference)
+        .ch(cross_type)
+        .ch(variation)
+        .done();
+}
+
+inline void reg_sho(std::vector<std::byte>& out, std::uint16_t locate, std::uint64_t ts,
+                    std::string_view stock, char action) {
+    msg(out, 'Y', locate, ts).str(stock, 8).ch(action).done();
+}
+
+inline void operational_halt(std::vector<std::byte>& out, std::uint16_t locate, std::uint64_t ts,
+                             std::string_view stock, char market, char action) {
+    msg(out, 'h', locate, ts).str(stock, 8).ch(market).ch(action).done();
+}
+
+inline void luld_collar(std::vector<std::byte>& out, std::uint16_t locate, std::uint64_t ts,
+                        std::string_view stock, std::uint32_t reference, std::uint32_t upper,
+                        std::uint32_t lower, std::uint32_t extension) {
+    msg(out, 'J', locate, ts).str(stock, 8).u32(reference).u32(upper).u32(lower).u32(extension).done();
+}
+
 inline void end_of_session(std::vector<std::byte>& out) {
     out.push_back(std::byte{0});
     out.push_back(std::byte{0});

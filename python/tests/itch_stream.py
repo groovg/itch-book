@@ -67,6 +67,31 @@ def broken_trade(locate: int, ts: int, match: int) -> bytes:
     return _msg(b"B", locate, ts, struct.pack(">Q", match))
 
 
+def noii(locate: int, ts: int, paired: int, imbalance: int, direction: str, stock: str, far: int, near: int,
+         reference: int, cross_type: str, variation: str = " ") -> bytes:
+    payload = struct.pack(">Q Q c 8s I I I c c", paired, imbalance, direction.encode(), stock.ljust(8).encode(),
+                          far, near, reference, cross_type.encode(), variation.encode())
+    return _msg(b"I", locate, ts, payload)
+
+
+def reg_sho(locate: int, ts: int, stock: str, action: str) -> bytes:
+    return _msg(b"Y", locate, ts, struct.pack(">8s c", stock.ljust(8).encode(), action.encode()))
+
+
+def operational_halt(locate: int, ts: int, stock: str, market: str, action: str) -> bytes:
+    return _msg(b"h", locate, ts, struct.pack(">8s c c", stock.ljust(8).encode(), market.encode(), action.encode()))
+
+
+def luld_collar(locate: int, ts: int, stock: str, reference: int, upper: int, lower: int, extension: int) -> bytes:
+    payload = struct.pack(">8s I I I I", stock.ljust(8).encode(), reference, upper, lower, extension)
+    return _msg(b"J", locate, ts, payload)
+
+
+def trading_action(locate: int, ts: int, stock: str, state: str, reason: str = "") -> bytes:
+    payload = struct.pack(">8s c c 4s", stock.ljust(8).encode(), state.encode(), b" ", reason.ljust(4).encode())
+    return _msg(b"H", locate, ts, payload)
+
+
 def unknown_message(ts: int) -> bytes:
     return _msg(b"Z", 0, ts, b"\x00" * 5)
 

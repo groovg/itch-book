@@ -19,11 +19,13 @@ from itch_stream import (
     add_order,
     broken_trade,
     cross_trade,
+    noii,
     order_delete,
     order_executed,
     stock_directory,
     system_event,
     trade,
+    trading_action,
 )
 
 NS = 1_000_000_000
@@ -100,6 +102,26 @@ def test_convert_default_tables(day, tmp_path, capsys):
     assert symbols.schema.field("round_lot_size").type == pa.uint32()
     events = pq.read_table(out / "system_events.parquet")
     assert events.column("event").to_pylist() == ["O", "C"]
+
+
+def test_convert_auction_and_halt_tables(tmp_path):
+    p = tmp_path / "12302019.NASDAQ_ITCH50"
+    p.write_bytes(b"".join([
+        system_event(T0, b"O"),
+        stock_directory(1, T0, "AAPL"),
+        trading_action(1, T0 + NS, "AAPL", "H", "LUDP"),
+        noii(1, T0 + 2 * NS, 5000, 1200, "B", "AAPL", 1_858_000, 1_857_500, 1_857_700, "O", "L"),
+        system_event(T0 + 3 * NS, b"C"),
+    ]))
+    out = tmp_path / "out"
+    assert cli.main(["convert", str(p), str(out), "--tables", "noii,halts"]) == 0
+    assert files(out) == ["halts.parquet", "noii.parquet", "symbols.parquet", "system_events.parquet"]
+    halts = pq.read_table(out / "halts.parquet")
+    assert halts.column("reason").to_pylist() == ["LUDP"]
+    assert halts.column("kind").to_pylist() == ["H"] and halts.column("symbol").to_pylist() == ["AAPL"]
+    n = pq.read_table(out / "noii.parquet")
+    assert n.column("ref_px").to_pylist() == [185.77] and n.column("direction").to_pylist() == ["B"]
+    assert n.schema.field("paired").type == pa.uint64()
 
 
 def test_convert_messages_with_symbol_filter_and_date_override(day, tmp_path, capsys):

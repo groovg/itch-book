@@ -256,4 +256,58 @@ struct BrokenTrade {
     }
 };
 
+struct Noii {
+    Header hdr;
+    std::uint64_t paired;
+    std::uint64_t imbalance;
+    char direction;
+    wire::Alpha<8> stock;
+    Price far_price;
+    Price near_price;
+    Price reference_price;
+    char cross_type;
+    char variation;
+
+    static Noii decode(const std::byte* m) {
+        return {header(m),      wire::u64(m + 11), wire::u64(m + 19), wire::ch(m + 27),
+                wire::alpha<8>(m + 28), price4(m + 36), price4(m + 40), price4(m + 44),
+                wire::ch(m + 48), wire::ch(m + 49)};
+    }
+};
+
+struct RegSho {
+    Header hdr;
+    wire::Alpha<8> stock;
+    char action;
+
+    static RegSho decode(const std::byte* m) {
+        return {header(m), wire::alpha<8>(m + 11), wire::ch(m + 19)};
+    }
+};
+
+struct OperationalHalt {
+    Header hdr;
+    wire::Alpha<8> stock;
+    char market;
+    char action;
+
+    static OperationalHalt decode(const std::byte* m) {
+        return {header(m), wire::alpha<8>(m + 11), wire::ch(m + 19), wire::ch(m + 20)};
+    }
+};
+
+struct LuldCollar {
+    Header hdr;
+    wire::Alpha<8> stock;
+    Price reference_price;
+    Price upper;
+    Price lower;
+    std::uint32_t extension;
+
+    static LuldCollar decode(const std::byte* m) {
+        return {header(m),      wire::alpha<8>(m + 11), price4(m + 19),
+                price4(m + 23), price4(m + 27),         wire::u32(m + 31)};
+    }
+};
+
 }  // namespace itch

@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <stdexcept>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -80,6 +81,39 @@ struct EventColumns {
     std::vector<std::uint8_t> event;
 };
 
+struct NoiiColumns {
+    std::vector<std::uint64_t> ts, seq, paired, imbalance;
+    std::vector<std::uint16_t> locate;
+    std::vector<std::uint8_t> direction, cross_type, variation;
+    std::vector<std::int64_t> far_px, near_px, ref_px;
+
+    template <typename F>
+    void each(F f) {
+        f(ts); f(seq); f(paired); f(imbalance); f(locate); f(direction); f(cross_type); f(variation);
+        f(far_px); f(near_px); f(ref_px);
+    }
+};
+
+struct HaltColumns {
+    std::vector<std::uint64_t> ts, seq;
+    std::vector<std::uint16_t> locate;
+    std::vector<std::uint8_t> kind, state, market;
+    std::vector<std::uint32_t> reason;
+};
+
+struct RegShoColumns {
+    std::vector<std::uint64_t> ts, seq;
+    std::vector<std::uint16_t> locate;
+    std::vector<std::uint8_t> action;
+};
+
+struct LuldColumns {
+    std::vector<std::uint64_t> ts, seq;
+    std::vector<std::uint16_t> locate;
+    std::vector<std::int64_t> ref_px, upper_px, lower_px;
+    std::vector<std::uint32_t> extension;
+};
+
 class Session {
     struct Sink {
         Session* s;
@@ -119,6 +153,34 @@ class Session {
         void on_trading_action(const itch::TradingAction& m) {
             s.stamp(m.hdr);
             mgr.on_trading_action(m);
+            s.emit_halt(m.hdr.locate, 'H', m.state, 'N', m.reason.raw.data());
+        }
+        void on_operational_halt(const itch::OperationalHalt& m) {
+            s.stamp(m.hdr);
+            s.emit_halt(m.hdr.locate, 'h', m.action, m.market, nullptr);
+        }
+        void on_noii(const itch::Noii& m) {
+            s.stamp(m.hdr);
+            s.emit_noii(m);
+        }
+        void on_reg_sho(const itch::RegSho& m) {
+            s.stamp(m.hdr);
+            if (!s.reg_sho_on_ || !s.selected(m.hdr.locate)) return;
+            s.reg_sho_.ts.push_back(s.ts_);
+            s.reg_sho_.seq.push_back(s.seq_);
+            s.reg_sho_.locate.push_back(m.hdr.locate);
+            s.reg_sho_.action.push_back(static_cast<std::uint8_t>(m.action));
+        }
+        void on_luld_collar(const itch::LuldCollar& m) {
+            s.stamp(m.hdr);
+            if (!s.luld_on_ || !s.selected(m.hdr.locate)) return;
+            s.luld_.ts.push_back(s.ts_);
+            s.luld_.seq.push_back(s.seq_);
+            s.luld_.locate.push_back(m.hdr.locate);
+            s.luld_.ref_px.push_back(m.reference_price.raw());
+            s.luld_.upper_px.push_back(m.upper.raw());
+            s.luld_.lower_px.push_back(m.lower.raw());
+            s.luld_.extension.push_back(m.extension);
         }
         void on_add(const itch::AddOrder& m) {
             s.stamp(m.hdr);
@@ -199,15 +261,22 @@ class Session {
     };
 
   public:
-    Session(bool bbo, bool trades, bool messages, std::size_t depth, std::vector<std::string> symbols)
+    Session(const std::vector<std::string>& tables, std::size_t depth, std::vector<std::string> symbols)
         : mgr_(Sink{this}, TradeSink{this}),
           handler_{*this, mgr_},
           parser_(handler_),
           depth_(depth),
-          wanted_(std::move(symbols)),
-          bbo_on_(bbo),
-          trades_on_(trades),
-          messages_on_(messages) {
+          wanted_(std::move(symbols)) {
+        for (const std::string& t : tables) {
+            if (t == "bbo") bbo_on_ = true;
+            else if (t == "trades") trades_on_ = true;
+            else if (t == "messages") messages_on_ = true;
+            else if (t == "noii") noii_on_ = true;
+            else if (t == "halts") halts_on_ = true;
+            else if (t == "reg_sho") reg_sho_on_ = true;
+            else if (t == "luld") luld_on_ = true;
+            else throw std::invalid_argument("unknown table " + t);
+        }
         mpids_.emplace_back();
         for (std::string& w : wanted_) w.resize(8, ' ');
     }
@@ -220,6 +289,7 @@ class Session {
         if (bbo_on_) bbo_.each(grow);
         if (trades_on_) trades_.each(grow);
         if (messages_on_) messages_.each(grow);
+        if (noii_on_) noii_.each(grow);
         if (depth_) {
             const std::size_t depth_rows = depth_ > 10 ? rows * 10 / depth_ : rows;
             depth_cols_.each([depth_rows](auto& v) { v.reserve(depth_rows); });
@@ -235,7 +305,57 @@ class Session {
         if (trades_.ts.size() > n) n = trades_.ts.size();
         if (messages_.ts.size() > n) n = messages_.ts.size();
         if (depth_cols_.ts.size() > n) n = depth_cols_.ts.size();
+        if (noii_.ts.size() > n) n = noii_.ts.size();
         return n;
+    }
+
+    nb::dict take_noii() {
+        nb::dict d;
+        d["ts"] = take(noii_.ts);
+        d["seq"] = take(noii_.seq);
+        d["locate"] = take(noii_.locate);
+        d["paired"] = take(noii_.paired);
+        d["imbalance"] = take(noii_.imbalance);
+        d["direction"] = take(noii_.direction);
+        d["far_px"] = take(noii_.far_px);
+        d["near_px"] = take(noii_.near_px);
+        d["ref_px"] = take(noii_.ref_px);
+        d["cross_type"] = take(noii_.cross_type);
+        d["variation"] = take(noii_.variation);
+        return d;
+    }
+
+    nb::dict take_halts() {
+        nb::dict d;
+        d["ts"] = take(halts_.ts);
+        d["seq"] = take(halts_.seq);
+        d["locate"] = take(halts_.locate);
+        d["kind"] = take(halts_.kind);
+        d["state"] = take(halts_.state);
+        d["reason"] = take(halts_.reason);
+        d["market"] = take(halts_.market);
+        return d;
+    }
+
+    nb::dict take_reg_sho() {
+        nb::dict d;
+        d["ts"] = take(reg_sho_.ts);
+        d["seq"] = take(reg_sho_.seq);
+        d["locate"] = take(reg_sho_.locate);
+        d["action"] = take(reg_sho_.action);
+        return d;
+    }
+
+    nb::dict take_luld() {
+        nb::dict d;
+        d["ts"] = take(luld_.ts);
+        d["seq"] = take(luld_.seq);
+        d["locate"] = take(luld_.locate);
+        d["ref_px"] = take(luld_.ref_px);
+        d["upper_px"] = take(luld_.upper_px);
+        d["lower_px"] = take(luld_.lower_px);
+        d["extension"] = take(luld_.extension);
+        return d;
     }
 
     nb::dict take_bbo() {
@@ -459,6 +579,34 @@ class Session {
         messages_.mpid.push_back(mpid);
     }
 
+    void emit_noii(const itch::Noii& m) {
+        if (!noii_on_ || !selected(m.hdr.locate)) return;
+        noii_.ts.push_back(ts_);
+        noii_.seq.push_back(seq_);
+        noii_.locate.push_back(m.hdr.locate);
+        noii_.paired.push_back(m.paired);
+        noii_.imbalance.push_back(m.imbalance);
+        noii_.direction.push_back(static_cast<std::uint8_t>(m.direction));
+        noii_.far_px.push_back(m.far_price.raw());
+        noii_.near_px.push_back(m.near_price.raw());
+        noii_.ref_px.push_back(m.reference_price.raw());
+        noii_.cross_type.push_back(static_cast<std::uint8_t>(m.cross_type));
+        noii_.variation.push_back(static_cast<std::uint8_t>(m.variation));
+    }
+
+    void emit_halt(std::uint16_t locate, char kind, char state, char market, const char* reason) {
+        if (!halts_on_ || !selected(locate)) return;
+        std::uint32_t packed = 0x20202020u;
+        if (reason) std::memcpy(&packed, reason, 4);
+        halts_.ts.push_back(ts_);
+        halts_.seq.push_back(seq_);
+        halts_.locate.push_back(locate);
+        halts_.kind.push_back(static_cast<std::uint8_t>(kind));
+        halts_.state.push_back(static_cast<std::uint8_t>(state));
+        halts_.reason.push_back(packed);
+        halts_.market.push_back(static_cast<std::uint8_t>(market));
+    }
+
     void emit_depth(std::uint16_t locate) {
         if (!depth_ || !selected(locate)) return;
         const itch::Book<>* b = mgr_.book(locate);
@@ -508,6 +656,10 @@ class Session {
     MessageColumns messages_;
     DepthColumns depth_cols_{depth_};
     EventColumns events_;
+    NoiiColumns noii_;
+    HaltColumns halts_;
+    RegShoColumns reg_sho_;
+    LuldColumns luld_;
     std::vector<std::vector<std::int64_t>> last_depth_;
     std::vector<std::int64_t> scratch_;
     std::vector<itch::StockDirectory> symbols_;
@@ -517,15 +669,16 @@ class Session {
     std::uint64_t ts_ = 0;
     std::uint64_t seq_ = 0;
     char last_event_ = ' ';
-    bool bbo_on_, trades_on_, messages_on_;
+    bool bbo_on_ = false, trades_on_ = false, messages_on_ = false;
+    bool noii_on_ = false, halts_on_ = false, reg_sho_on_ = false, luld_on_ = false;
 };
 
 }  // namespace
 
 NB_MODULE(_core, m) {
     nb::class_<Session>(m, "Session")
-        .def(nb::init<bool, bool, bool, std::size_t, std::vector<std::string>>(), nb::arg("bbo"),
-             nb::arg("trades"), nb::arg("messages"), nb::arg("depth"), nb::arg("symbols"))
+        .def(nb::init<const std::vector<std::string>&, std::size_t, std::vector<std::string>>(),
+             nb::arg("tables"), nb::arg("depth"), nb::arg("symbols"))
         .def("reserve", &Session::reserve)
         .def(
             "feed",
@@ -541,6 +694,10 @@ NB_MODULE(_core, m) {
         .def("take_messages", &Session::take_messages)
         .def("take_depth", &Session::take_depth)
         .def("take_events", &Session::take_events)
+        .def("take_noii", &Session::take_noii)
+        .def("take_halts", &Session::take_halts)
+        .def("take_reg_sho", &Session::take_reg_sho)
+        .def("take_luld", &Session::take_luld)
         .def("take_symbols", &Session::take_symbols)
         .def("mpids", &Session::mpids)
         .def("stats", &Session::stats);
