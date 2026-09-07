@@ -12,11 +12,13 @@ publishes at [emi.nasdaq.com/ITCH](https://emi.nasdaq.com/ITCH/) into BBO, trade
 order-by-order and depth tables, as numpy batches or Parquet.
 
 On a full trading day (`12302019.NASDAQ_ITCH50`, 268.7M messages, 8.25 GB) the C++ core
-replays parse + full book apply for all 8,907 symbols at **17.3M messages/s single-threaded**
-(58 ns/message) inside **1.4 GB** of book structures, with zero unresolved order references
-and zero crossed books at the close. The Python CLI converts the same day, gzipped, to
-`bbo` + `trades` Parquet in **62 s**; the resulting book agrees with Databento's XNAS.ITCH
-feed on 99.7 to 99.9% of nanoseconds ([validation](#validation)).
+replays parse + full book apply for all 8,907 symbols at **16.4M messages/s single-threaded**
+(61 ns/message) on one isolated bare-metal core, inside **1.4 GB** of book structures, with
+zero unresolved order references and zero crossed books at the close. The Python CLI
+converts the same day, gzipped, to `bbo` + `trades` Parquet in **31 s** on the same box; the
+resulting book agrees with Databento's XNAS.ITCH feed on 99.7 to 99.9% of nanoseconds
+([validation](#validation)). A desktop 9950X3D under Windows is a few percent faster on the
+core and 20 to 25% slower on the Python path ([benchmarks](#benchmarks)).
 
 ## Contents
 
@@ -364,8 +366,9 @@ differential testing.
 
 ## Validation
 
-Numbers below are the 9950X3D machine under [Benchmarks](#benchmarks), `itch2parquet` from
-the installed wheel, each reference driven through its own documented interface.
+Everything below is a correctness count rather than a timing, so it does not depend on the
+machine; it was produced with `itch2parquet` from the installed wheel, each reference
+driven through its own documented interface.
 
 Book invariants, three days end to end (`itch2parquet verify`), every counter zero:
 
@@ -397,87 +400,133 @@ sentinel.
 
 ## Benchmarks
 
-Machine: AMD Ryzen 9 9950X3D (Zen 5), Windows 11, single thread, no core isolation.
+Two machines:
+
+- **Isolated bare metal**: Ryzen 7 9700X (Zen 5, 8 cores on one CCD, 32 MB L3), 96 GB
+  DDR5, Ubuntu 24.04 / kernel 6.17, rented dedicated server, SMT off, `performance`
+  governor, transparent huge pages off, gcc 13.3 `-O3`. The C++ benches run pinned to one
+  core isolated with `isolcpus=2-7 nohz_full=2-7 rcu_nocbs=2-7`; the Python runs use the
+  same box booted without `isolcpus`, so that the reader, session and writer threads can
+  spread over the cores.
+- **Desktop**: Ryzen 9 9950X3D (Zen 5 with V-Cache), Windows 11, gcc 16.1 / clang-cl,
+  nothing pinned or isolated, boost clocks on.
+
+Both columns are the same 2019-12-30 NASDAQ day, and every reference is driven through its
+own documented interface on the machine it is compared against.
 
 ### Python, end to end
 
-The 2019-12-30 NASDAQ day (3.5 GB gz, 268.7M messages):
+The 2019-12-30 NASDAQ day (3.5 GB gz, 268.7M messages), `itch2parquet` from the installed
+wheel:
 
-| stage | wall | rate |
-|---|---|---|
-| gunzip only (Python zlib) | 19.9 s | 8.25 GB out |
-| `itch2parquet verify` (parse and apply, no table requested) | 25.4 s | 10.6 M msg/s |
-| `bbo` batches (top-of-book tracking and columns on) | 32.0 s | 8.4 M msg/s |
-| `itch2parquet convert` bbo + trades (adds Arrow + zstd write, 1.9 GB, on its own thread) | 39 to 43 s over four runs, with and without md5 | 6.4 M msg/s |
+| stage | bare metal 9700X | desktop 9950X3D |
+|---|---:|---:|
+| gunzip only (Python zlib) | 16.4 s | 19.9 s |
+| `itch2parquet verify` (parse and apply, no table requested) | 20.4 to 21.2 s (12.7 to 13.2 M msg/s) | 25.4 s (10.6 M msg/s) |
+| `bbo` batches, no write | 26.5 s (10.1 M msg/s) | 32.0 s (8.4 M msg/s) |
+| `itch2parquet convert` bbo + trades (Arrow + zstd, 1.9 GB, writer thread) | 31.2 to 31.5 s no md5, 34.8 s with | 39 to 43 s, with and without md5 |
+
+The Python runs on the box were made with the kernel booted without `isolcpus`: the reader,
+session and writer threads need to spread over cores, and pinned to an isolated set they
+serialize (16.4 s of gunzip plus 20.4 s of session is the 37 s the same `verify` took that
+way). The desktop is 20 to 25% slower than the box on this path; clock, cache, zlib and zstd
+builds all differ and were not separated.
 
 Where the time goes: gunzip runs on the reader thread and is hidden. With no table
-requested the consumer thread spends 25 s in the C++ session against 18 s for the bare core
-driven from C++ on the uncompressed day in RAM with the same compiler (clang-cl; /O2 and -O3
-measure the same); that 1.4x goes to the session's per-message bookkeeping, the handler
-indirection and the chunked feed, of which only the item below was profiled. Tracking the
-top of book and filling the `bbo` columns adds 6.6 s and numpy post-processing 3 s. Two
-costs were removed in 0.2.1 after profiling with perf: a second order-index lookup on every
-execute, cancel, delete and replace that only the `messages` and `depth` tables need (17%
-of the session's samples on a machine where it misses cache; skipped now unless one of
-them is on), and top-of-book tracking when no `bbo` table was asked for.
+requested the consumer thread spends 20 to 21 s in the C++ session against 16.4 s for the
+bare core driven from C++ over the uncompressed day in RAM (the default variant in the
+table below, same `-O3`, no `-march=native` on either side); on the desktop it is 25.4 s
+against 18 s for the same core under clang-cl, the compiler that builds the Windows wheel.
+That 1.2 to 1.4x goes to the session's per-message bookkeeping, the handler indirection and
+the chunked feed, of which only the item below was profiled. Tracking the top of book and
+filling the `bbo` columns
+adds 5.6 s on the box and 6.6 s on the desktop, and the Arrow encode plus zstd write on its
+own thread accounts for the rest of `convert`. Two costs were removed in 0.2.1 after a
+`perf` pass on a Linux VM: a second order-index lookup on every execute, cancel, delete and
+replace that only the `messages` and `depth` tables need (17% of the session's samples on
+that machine, where it misses cache; skipped now unless one of them is on), and top-of-book
+tracking when no `bbo` table was asked for.
 
-The same day on a netcup RS 2000 (EPYC 9645 KVM, 8 dedicated cores at 2.0 GHz, 16 GB, no
-V-Cache, Ubuntu 24.04, GCC 13): bare core pooled 4.6 M msg/s, flat hash 4.3, `unordered_map`
-2.2, naive 1.3 (the inline variant needs more than 16 GB and was not run); `verify` 69 s,
-`convert` 97 to 101 s. Against the 9950X3D that is 3.2x on the bare core with the same
-compiler (14.8 vs 4.6), 2.7x on `verify` and 2.4x on `convert`; clock (2.0 vs 5.x GHz),
-memory and cache all differ between the two machines and were not separated. The ranking of
-the store variants is the same on both, but the spreads collapse on the VM (pooled over
-flat hash 1.07x there against 1.8x here).
+Against other Python-reachable tooling, all on the bare-metal box, same file:
 
-On the same file and machine: `ml4t/itch-parser` (Rust, writes all 21 message types to
-5.79 GB of Parquet, a heavier job than the two tables above) finishes in 106 s
-(2.5 M msg/s); MeatPy (pure Python) takes 6.4 min just to read the day's messages and 14 min
-to run its documented single-symbol order-book example (0.70 and 0.32 M msg/s).
+| tool | wall | rate |
+|---|---:|---:|
+| `itch2parquet convert` (bbo + trades, 1.9 GB Parquet) | 31.2 s | 8.6 M msg/s |
+| `ml4t/itch-parser` (Rust, all 21 message types, 5.4 GB Parquet) | 66.3 s | 4.0 M msg/s |
+| MeatPy, reader loop only (pure Python) | 5.6 min extrapolated | 0.80 M msg/s |
+| MeatPy, documented single-symbol `LOBRecorder` example | 12 min extrapolated | 0.38 M msg/s |
+
+`ml4t/itch-parser` writes every message type, a heavier job than the two tables above, so
+the rates are not a like-for-like ranking; it is here for the order of magnitude. The
+MeatPy rows are measured over a 120 s budget and extrapolated to the full day.
+
+A third machine, for anyone sizing a cloud VM rather than a dedicated box: an 8-vCPU
+EPYC 9645 KVM instance at 2.0 GHz with 16 GB (Ubuntu 24.04, GCC 13) runs `verify` in 69 s
+and `convert` in 97 to 101 s, and its bare-core numbers are in the next section. Clock,
+memory and cache all differ and were not separated.
 
 ### C++, parse and apply
 
-GCC 16.1 `-O3`. Input: `12302019.NASDAQ_ITCH50` (268,744,780 messages, 8.25 GB) fully
-resident in a RAM buffer, so no IO or page-cache effects in the measured loop. Reproduce
-with `parse_throughput <file>` and `book_throughput <file> <variant>`.
+Input: `12302019.NASDAQ_ITCH50` (268,744,780 messages, 8.25 GB) fully resident in a RAM
+buffer, so no IO or page-cache effects in the measured loop. Reproduce with
+`parse_throughput <file>` and `book_throughput <file> <variant>`.
 
-Parse only:
+Parse only, bare metal 9700X (gcc 13.3, pinned isolated core):
 
 | tier | throughput | per message |
 |---|---|---|
-| framing walk (length-prefix skip) | 747 M msg/s (~23 GB/s) | 1.3 ns |
-| full decode, all 10 book-affecting types, checksummed | 194 M msg/s | 5.2 ns |
+| framing walk (length-prefix skip) | 709 M msg/s (~21.8 GB/s) | 1.4 ns |
+| full decode, all 10 book-affecting types, checksummed | 199 M msg/s (~6.1 GB/s) | 5.0 ns |
 
-Parse + apply, whole day, all symbols (best of repeated runs; "structures" is peak RSS
-minus the input buffer):
+The desktop measures 747 M msg/s and 194 M msg/s on the same two tiers, within a few
+percent, which is what you expect from a loop that is memory-bandwidth bound on one side
+and decode bound on the other.
 
-| variant | throughput | per message | structures |
-|---|---|---|---|
-| **pooled pages + order pool (default)** | **17.3 M msg/s** | **58 ns** | **~1.4 GB** |
-| inline paged records | 14.5 M msg/s | 69 ns | ~9.8 GB |
-| open-addressing flat hash | 9.7 M msg/s | 103 ns | ~0.3 GB |
-| `unordered_map` ref index, same book | 5.7 M msg/s | 174 ns | ~0.3 GB |
-| naive book (`std::map` + `unordered_map`) | 3.5 M msg/s | 287 ns | ~0.2 GB |
+Parse + apply, whole day, all symbols ("structures" is peak RSS minus the input buffer):
 
-Where the factors come from. Replacing `std::map` levels with the sorted vector is ~1.6×
+| variant | bare metal 9700X | desktop 9950X3D | structures |
+|---|---:|---:|---|
+| **pooled pages + order pool (default)** | **16.4 M msg/s (61 ns)** | **17.3 M msg/s (58 ns)** | **~1.4 GB** |
+| inline paged records | 16.0 M msg/s (63 ns) | 14.5 M msg/s (69 ns) | ~9.8 GB |
+| open-addressing flat hash | 9.2 M msg/s (109 ns) | 9.7 M msg/s (103 ns) | ~0.2 to 0.3 GB |
+| `unordered_map` ref index, same book | 6.9 M msg/s (145 ns) | 5.7 M msg/s (174 ns) | ~0.2 to 0.3 GB |
+| naive book (`std::map` + `unordered_map`) | 4.1 M msg/s (243 ns) | 3.5 M msg/s (287 ns) | ~0.2 GB |
+
+The ranking is identical on both machines and the default is within 6% of the V-Cache
+desktop, so this book does not depend on a 96 MB L3. The `itch-replay --book` tool (mmap
+file, BBO tracking on) does the same day at 12.5 M msg/s on the bare-metal box.
+
+Where the factors come from. Replacing `std::map` levels with the sorted vector is ~1.6x
 (touch-local scans instead of pointer chasing). Replacing the hash ref-index with paged
-direct indexing is another ~3× on the 9950X3D: one arithmetic dereference, no hashing, no probe chains,
-no rehash stalls, and near-monotonic refs keep the hot pages cached. The flat hash
-(fibonacci hashing, linear probing, backward-shift deletion) isolates how much of the
-`unordered_map` cost is the container itself: dropping per-node allocation and
-bucket-chain chasing buys ~1.7×, but it still hashes, probes and moves 40-byte slots on
-every delete, where the direct index just dereferences. When the key space is day-unique
-and near-dense, indexing beats even a good hash. The inline variant stores whole order
-records in the pages and skips the second indirection, but at ~10 GB of sparse pages the
-TLB pressure eats the win; the pooled variant keeps the live set compact and is both
-faster and 7× smaller. The `itch-replay --book` tool (mmap file, BBO tracking on) does
-the same day at 12.8 M msg/s.
+direct indexing is another ~2.4x on the 9700X and ~3x on the desktop: one arithmetic
+dereference, no hashing, no probe chains, no rehash stalls, and near-monotonic refs keep
+the hot pages cached. The flat hash (fibonacci hashing, linear probing, backward-shift
+deletion) isolates how much of the `unordered_map` cost is the container itself: dropping
+per-node allocation and bucket-chain chasing buys ~1.3 to 1.7x, but it still hashes, probes
+and moves 40-byte slots on every delete, where the direct index just dereferences. When the
+key space is day-unique and near-dense, indexing beats even a good hash. The inline variant
+stores whole order records in the pages and skips the second indirection, but at ~10 GB of
+sparse pages the TLB pressure eats the win; the pooled variant keeps the live set compact
+and is both faster and 7x smaller. On the 2.0 GHz EPYC VM the ranking survives but the
+spreads collapse (pooled 4.6 M msg/s, flat hash 4.3, `unordered_map` 2.2, naive 1.3;
+pooled over flat hash is 1.07x there against 1.8x here), so these ratios are a property of
+the machine as much as of the data structure.
 
 ### C++, apply latency
 
-Per-operation apply latency (rdtsc via
-[tsc-latency](https://github.com/groovg/tsc-latency), uncorrected, includes the ~10 ns
-timestamp-pair floor; ns):
+Per-operation apply latency on the bare-metal box, one pinned isolated core, rdtsc via
+[tsc-latency](https://github.com/groovg/tsc-latency), uncorrected, including the
+timestamp-pair floor shown in the first row (ns):
+
+| op | count | p50 | p90 | p99 | p99.9 | p99.99 | max |
+|---|---|---|---|---|---|---|---|
+| timestamp-pair floor | 200k | 10 | 20 | 20 | 20 | 20 | 20 |
+| add | 118.6M | 60 | 130 | 447 | 683 | 5,670 | 5.98 ms |
+| reduce (E/C/X) | 8.6M | 50 | 179 | 548 | 734 | 886 | 12.3 µs |
+| delete | 114.4M | 70 | 230 | 599 | 768 | 928 | 611 µs |
+| replace | 21.6M | 110 | 350 | 709 | 945 | 5,670 | 23.3 µs |
+
+The same pass on the unpinned desktop (GCC 16.1, boost clocks on, earlier run):
 
 | op | count | p50 | p90 | p99 | p99.9 | p99.99 | max |
 |---|---|---|---|---|---|---|---|
@@ -486,10 +535,11 @@ timestamp-pair floor; ns):
 | delete | 114.4M | 60 | 140 | 358 | 604 | 4,175 | 2.4 ms |
 | replace | 21.6M | 140 | 287 | 567 | 865 | 4,235 | 1.5 ms |
 
-The reduce p50 of 40 ns is the O(1) level-handle path. The p99.99 band is deep sorted-
-vector `memmove`s and fresh page allocations; the millisecond maxima are OS scheduler
-preemptions. Nothing was pinned or isolated, and a single uncorrected run over 268M
-messages will catch a few.
+The reduce p50 of 50 ns is the O(1) level-handle path. The p99.99 band is deep
+sorted-vector `memmove`s and fresh page allocations. The maxima are what a single
+uncorrected pass over 268M messages catches: the add path, which replace also takes, is
+the one that allocates, and its 5.98 ms outlier was not traced. Between the two machines the p50s stay within
+40 ns of each other and the maxima are 4x to 64x lower on the isolated core.
 
 ### Published numbers elsewhere
 
@@ -512,7 +562,9 @@ checks on at all times.
 - Order references are trusted to be locate-consistent (the order's stored locate wins
   over the message header on E/X/D/U, so a corrupt feed cannot cross-corrupt books).
 - Single-threaded by design; shard symbols across instances above the library if needed.
-- Latency numbers above are from an unpinned desktop Windows box with boost clocks on.
+- Latency numbers above come from a rented, isolated Linux box (`isolcpus`, `nohz_full`,
+  SMT off, `performance` governor). On an unpinned desktop the medians are within 40 ns and
+  the maxima 4x to 64x worse; reproducing the tails needs the same setup.
 
 ## Production notes
 
