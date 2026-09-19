@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 
 import itch_book as ib
-from itch_book._dates import midnight_ns
+from itch_book import midnight_ns
 
 from itch_stream import (
     add_order,
@@ -77,6 +77,26 @@ def gather(feed, tables):
 
 def chars(a: np.ndarray) -> list[str]:
     return [x.decode() for x in a.tolist()]
+
+
+def test_column_order(feed):
+    b = list(feed.batches(tables=ib.TABLES, depth=1))[-1]
+    assert {t: list(getattr(b, t)) for t in ib.TABLES} == {
+        "bbo": ["ts_event", "seq", "locate", "bid_px", "bid_sz", "bid_ct", "ask_px", "ask_sz", "ask_ct"],
+        "trades": ["ts_event", "seq", "locate", "kind", "price", "size", "side", "order_id", "match_number",
+                   "cross_type"],
+        "messages": ["ts_event", "seq", "locate", "type", "action", "side", "price", "size", "remaining",
+                     "printable", "order_id", "old_order_id", "mpid"],
+        "depth": ["ts_event", "seq", "locate", "bid_px_00", "bid_sz_00", "bid_ct_00", "ask_px_00", "ask_sz_00",
+                  "ask_ct_00"],
+        "noii": ["ts_event", "seq", "locate", "paired", "imbalance", "direction", "far_px", "near_px", "ref_px",
+                 "cross_type", "variation"],
+        "halts": ["ts_event", "seq", "locate", "kind", "state", "reason", "market"],
+        "reg_sho": ["ts_event", "seq", "locate", "action"],
+        "luld": ["ts_event", "seq", "locate", "ref_px", "upper_px", "lower_px", "extension"],
+        "symbols": list(ib.SYMBOL_COLUMNS),
+        "system_events": ["ts_event", "seq", "event"],
+    }
 
 
 def test_trades_table(feed):

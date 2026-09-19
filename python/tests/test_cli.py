@@ -13,7 +13,7 @@ pa = pytest.importorskip("pyarrow")
 pq = pytest.importorskip("pyarrow.parquet")
 
 from itch_book import cli
-from itch_book._dates import midnight_ns
+from itch_book import midnight_ns
 
 from itch_stream import (
     add_order,

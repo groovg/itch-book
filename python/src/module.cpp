@@ -3,6 +3,7 @@
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/vector.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -28,7 +29,8 @@ struct BboColumns {
 
     template <typename F>
     void each(F f) {
-        f(ts); f(seq); f(locate); f(bid_px); f(bid_sz); f(bid_ct); f(ask_px); f(ask_sz); f(ask_ct);
+        f("ts_event", ts); f("seq", seq); f("locate", locate); f("bid_px", bid_px); f("bid_sz", bid_sz);
+        f("bid_ct", bid_ct); f("ask_px", ask_px); f("ask_sz", ask_sz); f("ask_ct", ask_ct);
     }
 };
 
@@ -40,7 +42,9 @@ struct TradeColumns {
 
     template <typename F>
     void each(F f) {
-        f(ts); f(seq); f(size); f(order_id); f(match); f(locate); f(kind); f(side); f(cross_type); f(px);
+        f("ts_event", ts); f("seq", seq); f("locate", locate); f("kind", kind); f("price", px);
+        f("size", size); f("side", side); f("order_id", order_id); f("match_number", match);
+        f("cross_type", cross_type);
     }
 };
 
@@ -53,8 +57,9 @@ struct MessageColumns {
 
     template <typename F>
     void each(F f) {
-        f(ts); f(seq); f(order_id); f(old_order_id); f(locate); f(mpid); f(type); f(action); f(side);
-        f(printable); f(px); f(size); f(remaining);
+        f("ts_event", ts); f("seq", seq); f("locate", locate); f("type", type); f("action", action);
+        f("side", side); f("price", px); f("size", size); f("remaining", remaining);
+        f("printable", printable); f("order_id", order_id); f("old_order_id", old_order_id); f("mpid", mpid);
     }
 };
 
@@ -69,9 +74,15 @@ struct DepthColumns {
 
     template <typename F>
     void each(F f) {
-        f(ts); f(seq); f(locate);
+        f("ts_event", ts); f("seq", seq); f("locate", locate);
+        char name[16];
         for (std::size_t i = 0; i < bid_px.size(); ++i) {
-            f(bid_px[i]); f(bid_sz[i]); f(bid_ct[i]); f(ask_px[i]); f(ask_sz[i]); f(ask_ct[i]);
+            std::snprintf(name, sizeof name, "bid_px_%02zu", i); f(name, bid_px[i]);
+            std::snprintf(name, sizeof name, "bid_sz_%02zu", i); f(name, bid_sz[i]);
+            std::snprintf(name, sizeof name, "bid_ct_%02zu", i); f(name, bid_ct[i]);
+            std::snprintf(name, sizeof name, "ask_px_%02zu", i); f(name, ask_px[i]);
+            std::snprintf(name, sizeof name, "ask_sz_%02zu", i); f(name, ask_sz[i]);
+            std::snprintf(name, sizeof name, "ask_ct_%02zu", i); f(name, ask_ct[i]);
         }
     }
 };
@@ -79,6 +90,11 @@ struct DepthColumns {
 struct EventColumns {
     std::vector<std::uint64_t> ts, seq;
     std::vector<std::uint8_t> event;
+
+    template <typename F>
+    void each(F f) {
+        f("ts_event", ts); f("seq", seq); f("event", event);
+    }
 };
 
 struct NoiiColumns {
@@ -89,8 +105,9 @@ struct NoiiColumns {
 
     template <typename F>
     void each(F f) {
-        f(ts); f(seq); f(paired); f(imbalance); f(locate); f(direction); f(cross_type); f(variation);
-        f(far_px); f(near_px); f(ref_px);
+        f("ts_event", ts); f("seq", seq); f("locate", locate); f("paired", paired);
+        f("imbalance", imbalance); f("direction", direction); f("far_px", far_px); f("near_px", near_px);
+        f("ref_px", ref_px); f("cross_type", cross_type); f("variation", variation);
     }
 };
 
@@ -99,12 +116,23 @@ struct HaltColumns {
     std::vector<std::uint16_t> locate;
     std::vector<std::uint8_t> kind, state, market;
     std::vector<std::uint32_t> reason;
+
+    template <typename F>
+    void each(F f) {
+        f("ts_event", ts); f("seq", seq); f("locate", locate); f("kind", kind); f("state", state);
+        f("reason", reason); f("market", market);
+    }
 };
 
 struct RegShoColumns {
     std::vector<std::uint64_t> ts, seq;
     std::vector<std::uint16_t> locate;
     std::vector<std::uint8_t> action;
+
+    template <typename F>
+    void each(F f) {
+        f("ts_event", ts); f("seq", seq); f("locate", locate); f("action", action);
+    }
 };
 
 struct LuldColumns {
@@ -112,6 +140,12 @@ struct LuldColumns {
     std::vector<std::uint16_t> locate;
     std::vector<std::int64_t> ref_px, upper_px, lower_px;
     std::vector<std::uint32_t> extension;
+
+    template <typename F>
+    void each(F f) {
+        f("ts_event", ts); f("seq", seq); f("locate", locate); f("ref_px", ref_px);
+        f("upper_px", upper_px); f("lower_px", lower_px); f("extension", extension);
+    }
 };
 
 class Session {
@@ -286,14 +320,14 @@ class Session {
 
     void reserve(std::size_t rows) {
         reserve_ = rows;
-        auto grow = [rows](auto& v) { v.reserve(rows); };
+        auto grow = [rows](const char*, auto& v) { v.reserve(rows); };
         if (bbo_on_) bbo_.each(grow);
         if (trades_on_) trades_.each(grow);
         if (messages_on_) messages_.each(grow);
         if (noii_on_) noii_.each(grow);
         if (depth_) {
             const std::size_t depth_rows = depth_ > 10 ? rows * 10 / depth_ : rows;
-            depth_cols_.each([depth_rows](auto& v) { v.reserve(depth_rows); });
+            depth_cols_.each([depth_rows](const char*, auto& v) { v.reserve(depth_rows); });
         }
     }
 
@@ -302,133 +336,21 @@ class Session {
     }
 
     std::size_t rows() const {
-        std::size_t n = bbo_.ts.size();
-        if (trades_.ts.size() > n) n = trades_.ts.size();
-        if (messages_.ts.size() > n) n = messages_.ts.size();
-        if (depth_cols_.ts.size() > n) n = depth_cols_.ts.size();
-        if (noii_.ts.size() > n) n = noii_.ts.size();
-        return n;
+        return std::max({bbo_.ts.size(), trades_.ts.size(), messages_.ts.size(), depth_cols_.ts.size(),
+                         noii_.ts.size()});
     }
 
-    nb::dict take_noii() {
-        nb::dict d;
-        d["ts"] = take(noii_.ts);
-        d["seq"] = take(noii_.seq);
-        d["locate"] = take(noii_.locate);
-        d["paired"] = take(noii_.paired);
-        d["imbalance"] = take(noii_.imbalance);
-        d["direction"] = take(noii_.direction);
-        d["far_px"] = take(noii_.far_px);
-        d["near_px"] = take(noii_.near_px);
-        d["ref_px"] = take(noii_.ref_px);
-        d["cross_type"] = take(noii_.cross_type);
-        d["variation"] = take(noii_.variation);
-        return d;
-    }
-
-    nb::dict take_halts() {
-        nb::dict d;
-        d["ts"] = take(halts_.ts);
-        d["seq"] = take(halts_.seq);
-        d["locate"] = take(halts_.locate);
-        d["kind"] = take(halts_.kind);
-        d["state"] = take(halts_.state);
-        d["reason"] = take(halts_.reason);
-        d["market"] = take(halts_.market);
-        return d;
-    }
-
-    nb::dict take_reg_sho() {
-        nb::dict d;
-        d["ts"] = take(reg_sho_.ts);
-        d["seq"] = take(reg_sho_.seq);
-        d["locate"] = take(reg_sho_.locate);
-        d["action"] = take(reg_sho_.action);
-        return d;
-    }
-
-    nb::dict take_luld() {
-        nb::dict d;
-        d["ts"] = take(luld_.ts);
-        d["seq"] = take(luld_.seq);
-        d["locate"] = take(luld_.locate);
-        d["ref_px"] = take(luld_.ref_px);
-        d["upper_px"] = take(luld_.upper_px);
-        d["lower_px"] = take(luld_.lower_px);
-        d["extension"] = take(luld_.extension);
-        return d;
-    }
-
-    nb::dict take_bbo() {
-        nb::dict d;
-        d["ts"] = take(bbo_.ts);
-        d["seq"] = take(bbo_.seq);
-        d["locate"] = take(bbo_.locate);
-        d["bid_px"] = take(bbo_.bid_px);
-        d["bid_sz"] = take(bbo_.bid_sz);
-        d["bid_ct"] = take(bbo_.bid_ct);
-        d["ask_px"] = take(bbo_.ask_px);
-        d["ask_sz"] = take(bbo_.ask_sz);
-        d["ask_ct"] = take(bbo_.ask_ct);
-        return d;
-    }
-
-    nb::dict take_trades() {
-        nb::dict d;
-        d["ts"] = take(trades_.ts);
-        d["seq"] = take(trades_.seq);
-        d["locate"] = take(trades_.locate);
-        d["kind"] = take(trades_.kind);
-        d["px"] = take(trades_.px);
-        d["size"] = take(trades_.size);
-        d["side"] = take(trades_.side);
-        d["order_id"] = take(trades_.order_id);
-        d["match"] = take(trades_.match);
-        d["cross_type"] = take(trades_.cross_type);
-        return d;
-    }
-
-    nb::dict take_messages() {
-        nb::dict d;
-        d["ts"] = take(messages_.ts);
-        d["seq"] = take(messages_.seq);
-        d["locate"] = take(messages_.locate);
-        d["type"] = take(messages_.type);
-        d["action"] = take(messages_.action);
-        d["side"] = take(messages_.side);
-        d["px"] = take(messages_.px);
-        d["size"] = take(messages_.size);
-        d["remaining"] = take(messages_.remaining);
-        d["printable"] = take(messages_.printable);
-        d["order_id"] = take(messages_.order_id);
-        d["old_order_id"] = take(messages_.old_order_id);
-        d["mpid"] = take(messages_.mpid);
-        return d;
-    }
-
-    nb::dict take_depth() {
-        nb::dict d;
-        d["ts"] = take(depth_cols_.ts);
-        d["seq"] = take(depth_cols_.seq);
-        d["locate"] = take(depth_cols_.locate);
-        char name[16];
-        for (std::size_t i = 0; i < depth_; ++i) {
-            std::snprintf(name, sizeof name, "bid_px_%02zu", i); d[name] = take(depth_cols_.bid_px[i]);
-            std::snprintf(name, sizeof name, "bid_sz_%02zu", i); d[name] = take(depth_cols_.bid_sz[i]);
-            std::snprintf(name, sizeof name, "bid_ct_%02zu", i); d[name] = take(depth_cols_.bid_ct[i]);
-            std::snprintf(name, sizeof name, "ask_px_%02zu", i); d[name] = take(depth_cols_.ask_px[i]);
-            std::snprintf(name, sizeof name, "ask_sz_%02zu", i); d[name] = take(depth_cols_.ask_sz[i]);
-            std::snprintf(name, sizeof name, "ask_ct_%02zu", i); d[name] = take(depth_cols_.ask_ct[i]);
-        }
-        return d;
-    }
-
-    nb::dict take_events() {
-        nb::dict d;
-        d["ts"] = take(events_.ts);
-        d["seq"] = take(events_.seq);
-        d["event"] = take(events_.event);
-        return d;
+    nb::dict take_table(const std::string& table) {
+        if (table == "bbo") return take_all(bbo_);
+        if (table == "trades") return take_all(trades_);
+        if (table == "messages") return take_all(messages_);
+        if (table == "depth") return take_all(depth_cols_);
+        if (table == "noii") return take_all(noii_);
+        if (table == "halts") return take_all(halts_);
+        if (table == "reg_sho") return take_all(reg_sho_);
+        if (table == "luld") return take_all(luld_);
+        if (table == "system_events") return take_all(events_);
+        throw std::invalid_argument("unknown table " + table);
     }
 
     nb::list mpids() const {
@@ -488,6 +410,13 @@ class Session {
         nb::capsule owner(heap, [](void* p) noexcept { delete static_cast<std::vector<T>*>(p); });
         v.reserve(reserve_);
         return nb::ndarray<nb::numpy, T, nb::ndim<1>>(heap->data(), {heap->size()}, owner);
+    }
+
+    template <typename Columns>
+    nb::dict take_all(Columns& cols) {
+        nb::dict d;
+        cols.each([&](const char* name, auto& v) { d[name] = take(v); });
+        return d;
     }
 
     void stamp(const itch::Header& h) {
@@ -692,15 +621,7 @@ NB_MODULE(_core, m) {
                 s.feed(p, n);
             })
         .def("rows", &Session::rows)
-        .def("take_bbo", &Session::take_bbo)
-        .def("take_trades", &Session::take_trades)
-        .def("take_messages", &Session::take_messages)
-        .def("take_depth", &Session::take_depth)
-        .def("take_events", &Session::take_events)
-        .def("take_noii", &Session::take_noii)
-        .def("take_halts", &Session::take_halts)
-        .def("take_reg_sho", &Session::take_reg_sho)
-        .def("take_luld", &Session::take_luld)
+        .def("take", &Session::take_table)
         .def("take_symbols", &Session::take_symbols)
         .def("mpids", &Session::mpids)
         .def("stats", &Session::stats);

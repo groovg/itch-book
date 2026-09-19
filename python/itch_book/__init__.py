@@ -1,17 +1,19 @@
 import builtins
 import datetime as dt
 import gzip
+import os
 import queue
+import re
 import threading
 import warnings
 from collections.abc import Iterator
 from importlib.metadata import version
 from types import SimpleNamespace
+from zoneinfo import ZoneInfo
 
 import numpy as np
 
 from ._core import Session
-from ._dates import midnight_ns, session_date
 
 __all__ = ["Feed", "to_polars"]
 __version__ = version("itch-book")
@@ -24,18 +26,28 @@ SYMBOL_COLUMNS = (
     "round_lots_only", "issue_classification", "issue_subtype", "authenticity",
     "short_sale_threshold", "ipo_flag", "luld_tier", "etp_flag", "etp_leverage", "inverse",
 )
-BBO_COLUMNS = ("ts_event", "seq", "locate", "bid_px", "bid_sz", "bid_ct", "ask_px", "ask_sz", "ask_ct")
-TRADE_COLUMNS = ("ts_event", "seq", "locate", "kind", "price", "size", "side", "order_id", "match_number", "cross_type")
-MESSAGE_COLUMNS = ("ts_event", "seq", "locate", "type", "action", "side", "price", "size", "remaining",
-                   "printable", "order_id", "old_order_id", "mpid")
-EVENT_COLUMNS = ("ts_event", "seq", "event")
-NOII_COLUMNS = ("ts_event", "seq", "locate", "paired", "imbalance", "direction", "far_px", "near_px", "ref_px",
-                "cross_type", "variation")
-HALT_COLUMNS = ("ts_event", "seq", "locate", "kind", "state", "reason", "market")
-REG_SHO_COLUMNS = ("ts_event", "seq", "locate", "action")
-LULD_COLUMNS = ("ts_event", "seq", "locate", "ref_px", "upper_px", "lower_px", "extension")
 CHAR_COLUMNS = ("kind", "side", "cross_type", "type", "action", "event", "direction", "variation", "state", "market")
 SMALLEST_FRAME = 21
+_PATTERNS = (
+    (re.compile(r"^(\d{2})(\d{2})(\d{4})\.NASDAQ_ITCH50"), lambda m: (int(m[3]), int(m[1]), int(m[2]))),
+    (re.compile(r"^S(\d{2})(\d{2})(\d{2})-v50"), lambda m: (2000 + int(m[3]), int(m[1]), int(m[2]))),
+    (re.compile(r"^(\d{4})(\d{2})(\d{2})\.(?:BX|PSX)_ITCH_50"), lambda m: (int(m[1]), int(m[2]), int(m[3]))),
+)
+
+
+def session_date(path: str) -> dt.date | None:
+    name = os.path.basename(path)
+    for pattern, pick in _PATTERNS:
+        m = pattern.match(name)
+        if m:
+            y, mo, d = pick(m)
+            return dt.date(y, mo, d)
+    return None
+
+
+def midnight_ns(day: dt.date) -> int:
+    midnight = dt.datetime(day.year, day.month, day.day, tzinfo=ZoneInfo("America/New_York"))
+    return int(midnight.timestamp()) * 1_000_000_000
 
 
 def to_polars(table: dict):
@@ -173,69 +185,27 @@ class Feed:
                 continue
 
     def _batch(self, session: Session, tables: tuple[str, ...]) -> SimpleNamespace:
-        out = {}
-        if "bbo" in tables:
-            cols = self._common(session.take_bbo())
-            self._price(cols, "bid_px")
-            self._price(cols, "ask_px")
-            out["bbo"] = {k: cols[k] for k in BBO_COLUMNS}
-        if "trades" in tables:
-            cols = self._common(session.take_trades())
-            cols["price"] = cols.pop("px")
-            cols["match_number"] = cols.pop("match")
-            self._price(cols, "price")
-            out["trades"] = {k: cols[k] for k in TRADE_COLUMNS}
-        if "messages" in tables:
-            cols = self._common(session.take_messages())
-            cols["price"] = cols.pop("px")
-            cols["printable"] = cols["printable"].view(np.bool_)
-            self._price(cols, "price")
+        out = {t: self._common(session.take(t)) for t in TABLES if t in tables and t != "symbols"}
+        if "messages" in out:
+            out["messages"]["printable"] = out["messages"]["printable"].view(np.bool_)
             self.mpids = session.mpids()
-            out["messages"] = {k: cols[k] for k in MESSAGE_COLUMNS}
-        if "depth" in tables:
-            cols = self._common(session.take_depth())
-            for name in [c for c in cols if "_px_" in c]:
-                self._price(cols, name)
-            head = ("ts_event", "seq", "locate")
-            out["depth"] = {k: cols[k] for k in head} | {k: v for k, v in cols.items() if k not in head}
-        if "noii" in tables:
-            cols = self._common(session.take_noii())
-            for name in ("far_px", "near_px", "ref_px"):
-                self._price(cols, name)
-            out["noii"] = {k: cols[k] for k in NOII_COLUMNS}
-        if "halts" in tables:
-            cols = self._common(session.take_halts())
-            cols["reason"] = cols["reason"].view("S4")
-            out["halts"] = {k: cols[k] for k in HALT_COLUMNS}
-        if "reg_sho" in tables:
-            cols = self._common(session.take_reg_sho())
-            out["reg_sho"] = {k: cols[k] for k in REG_SHO_COLUMNS}
-        if "luld" in tables:
-            cols = self._common(session.take_luld())
-            for name in ("ref_px", "upper_px", "lower_px"):
-                self._price(cols, name)
-            out["luld"] = {k: cols[k] for k in LULD_COLUMNS}
-        if "system_events" in tables:
-            cols = self._common(session.take_events())
-            out["system_events"] = {k: cols[k] for k in EVENT_COLUMNS}
+        if "halts" in out:
+            out["halts"]["reason"] = out["halts"]["reason"].view("S4")
         if "symbols" in tables:
             rows = session.take_symbols()
             out["symbols"] = {c: [r[i] for r in rows] for i, c in enumerate(SYMBOL_COLUMNS)}
         return SimpleNamespace(**out)
 
     def _common(self, cols: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
-        ts = cols.pop("ts")
+        ts = cols["ts_event"]
         ts += self._midnight
         cols["ts_event"] = ts.view(np.int64)
-        for c in CHAR_COLUMNS:
-            if c in cols:
-                cols[c] = cols[c].view("S1")
+        for c, v in cols.items():
+            if c in CHAR_COLUMNS:
+                cols[c] = v.view("S1")
+            elif self.price_type == "float" and (c == "price" or "_px" in c):
+                cols[c] = np.where(v == 0, np.nan, v / PRICE_SCALE)
         return cols
-
-    def _price(self, cols: dict[str, np.ndarray], name: str) -> None:
-        if self.price_type == "float":
-            px = cols[name]
-            cols[name] = np.where(px == 0, np.nan, px / PRICE_SCALE)
 
 
 def open(path: str, **kwargs) -> Feed:  # noqa: A001

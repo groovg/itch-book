@@ -16,8 +16,7 @@ from pathlib import Path
 
 import numpy as np
 
-from . import PRICE_SCALE, TABLES, Feed, __version__
-from ._dates import session_date
+from . import PRICE_SCALE, TABLES, Feed, __version__, session_date
 
 EMI = "https://emi.nasdaq.com/ITCH/"
 EMI_DIRS = ("Nasdaq ITCH/", "Nasdaq BX ITCH/", "Nasdaq PSX ITCH/")
@@ -54,22 +53,23 @@ def strings(arr: np.ndarray):
     return out if width == 1 else pc.utf8_rtrim_whitespace(out)
 
 
+def grown(lookup: np.ndarray, top: int) -> np.ndarray:
+    if top < len(lookup):
+        return lookup
+    out = np.full(top + 1, "", dtype="U8")
+    out[: len(lookup)] = lookup
+    return out
+
+
 class Names:
     def __init__(self):
         self.lookup = np.full(1, "", dtype="U8")
         self.rows: dict[str, list] = {}
 
-    def _grow(self, top: int) -> None:
-        if top >= len(self.lookup):
-            grown = np.full(top + 1, "", dtype="U8")
-            grown[: len(self.lookup)] = self.lookup
-            self.lookup = grown
-
     def update(self, symbols: dict[str, list]) -> None:
         if not symbols["locate"]:
             return
-        self._grow(max(symbols["locate"]))
-        self.lookup = self.lookup.copy()
+        self.lookup = grown(self.lookup, max(symbols["locate"])).copy()
         for loc, name in zip(symbols["locate"], symbols["symbol"]):
             self.lookup[loc] = name
         for k, v in symbols.items():
@@ -97,11 +97,7 @@ def to_arrow(table: dict[str, np.ndarray], lookup: np.ndarray):
         else:
             cols[name] = pa.array(arr)
         if name == "locate":
-            top = int(arr.max()) if len(arr) else 0
-            if top >= len(lookup):
-                grown = np.full(top + 1, "", dtype="U8")
-                grown[: len(lookup)] = lookup
-                lookup = grown
+            lookup = grown(lookup, int(arr.max()) if len(arr) else 0)
             cols["symbol"] = pa.DictionaryArray.from_arrays(pa.array(arr.astype(np.int32)), pa.array(lookup))
     return pa.table(cols)
 

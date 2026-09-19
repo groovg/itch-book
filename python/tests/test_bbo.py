@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 
 import itch_book as ib
-from itch_book._dates import midnight_ns, session_date
+from itch_book import midnight_ns, session_date
 
 from itch_stream import (
     add_order,
@@ -63,7 +63,7 @@ def collect(path, tables=("bbo", "symbols"), **kwargs):
     batches = list(feed.batches(tables=tables, rows=rows))
     out = {}
     if "bbo" in tables:
-        out["bbo"] = {k: np.concatenate([b.bbo[k] for b in batches]) for k in ib.BBO_COLUMNS}
+        out["bbo"] = {k: np.concatenate([b.bbo[k] for b in batches]) for k in batches[0].bbo}
     if "symbols" in tables:
         out["symbols"] = {c: sum((b.symbols[c] for b in batches), []) for c in ib.SYMBOL_COLUMNS}
     return feed, out, batches

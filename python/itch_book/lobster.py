@@ -3,8 +3,7 @@ from pathlib import Path
 
 import numpy as np
 
-from . import Feed
-from ._dates import midnight_ns
+from . import Feed, midnight_ns
 
 OPEN_MS = 34_200_000
 CLOSE_MS = 57_600_000
