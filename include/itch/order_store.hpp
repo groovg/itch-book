@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <memory>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace itch {
@@ -38,12 +39,7 @@ class OrderStore {
     };
 
   public:
-    Order* find(std::uint64_t ref) {
-        const std::size_t pi = ref >> kPageBits;
-        if (pi >= pages_.size() || !pages_[pi]) return nullptr;
-        Order& o = pages_[pi]->slots[ref & kPageMask];
-        return o.level != kNil ? &o : nullptr;
-    }
+    Order* find(std::uint64_t ref) { return const_cast<Order*>(std::as_const(*this).find(ref)); }
 
     const Order* find(std::uint64_t ref) const {
         const std::size_t pi = ref >> kPageBits;
@@ -119,12 +115,7 @@ class PooledOrderStore {
     };
 
   public:
-    Order* find(std::uint64_t ref) {
-        const std::size_t pi = ref >> kPageBits;
-        if (pi >= pages_.size() || !pages_[pi]) return nullptr;
-        const Handle h = pages_[pi]->slots[ref & kPageMask];
-        return h == kNil ? nullptr : &pool_[h];
-    }
+    Order* find(std::uint64_t ref) { return const_cast<Order*>(std::as_const(*this).find(ref)); }
 
     const Order* find(std::uint64_t ref) const {
         const std::size_t pi = ref >> kPageBits;
@@ -170,7 +161,6 @@ class PooledOrderStore {
     }
 
     std::uint64_t live_orders() const { return pool_.size() - free_.size(); }
-    std::size_t pool_capacity() const { return pool_.size(); }
 
     std::size_t resident_pages() const {
         std::size_t n = 0;
@@ -214,10 +204,7 @@ class FlatHashOrderStore {
         rehash(std::bit_ceil(initial_cap));
     }
 
-    Order* find(std::uint64_t ref) {
-        Slot& s = slots_[probe(ref)];
-        return s.ref == ref && s.o.level != kNil ? &s.o : nullptr;
-    }
+    Order* find(std::uint64_t ref) { return const_cast<Order*>(std::as_const(*this).find(ref)); }
 
     const Order* find(std::uint64_t ref) const {
         const Slot& s = slots_[probe(ref)];
@@ -300,10 +287,7 @@ class HashOrderStore {
   public:
     HashOrderStore() { map_.reserve(std::size_t{1} << 22); }
 
-    Order* find(std::uint64_t ref) {
-        const auto it = map_.find(ref);
-        return it == map_.end() || it->second.level == kNil ? nullptr : &it->second;
-    }
+    Order* find(std::uint64_t ref) { return const_cast<Order*>(std::as_const(*this).find(ref)); }
 
     const Order* find(std::uint64_t ref) const {
         const auto it = map_.find(ref);

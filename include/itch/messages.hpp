@@ -15,32 +15,6 @@ inline Price price4(const std::byte* p) {
     return Price::from_raw(static_cast<std::int64_t>(wire::u32(p)));
 }
 
-enum class MsgType : char {
-    SystemEvent = 'S',
-    StockDirectory = 'R',
-    TradingAction = 'H',
-    RegSho = 'Y',
-    ParticipantPosition = 'L',
-    MwcbDecline = 'V',
-    MwcbStatus = 'W',
-    IpoQuoting = 'K',
-    LuldCollar = 'J',
-    OperationalHalt = 'h',
-    AddOrder = 'A',
-    AddOrderMpid = 'F',
-    OrderExecuted = 'E',
-    OrderExecutedPrice = 'C',
-    OrderCancel = 'X',
-    OrderDelete = 'D',
-    OrderReplace = 'U',
-    Trade = 'P',
-    CrossTrade = 'Q',
-    BrokenTrade = 'B',
-    Noii = 'I',
-    Rpii = 'N',
-    DirectListing = 'O',
-};
-
 constexpr std::size_t wire_length(char type) {
     switch (type) {
         case 'S': return 12;

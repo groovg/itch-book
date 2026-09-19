@@ -9,26 +9,17 @@
 
 namespace itch::wire {
 
-inline std::uint16_t u16(const std::byte* p) {
-    std::uint16_t v;
+template <typename T>
+inline T be(const std::byte* p) {
+    T v;
     std::memcpy(&v, p, sizeof v);
     if constexpr (std::endian::native == std::endian::little) v = std::byteswap(v);
     return v;
 }
 
-inline std::uint32_t u32(const std::byte* p) {
-    std::uint32_t v;
-    std::memcpy(&v, p, sizeof v);
-    if constexpr (std::endian::native == std::endian::little) v = std::byteswap(v);
-    return v;
-}
-
-inline std::uint64_t u64(const std::byte* p) {
-    std::uint64_t v;
-    std::memcpy(&v, p, sizeof v);
-    if constexpr (std::endian::native == std::endian::little) v = std::byteswap(v);
-    return v;
-}
+inline std::uint16_t u16(const std::byte* p) { return be<std::uint16_t>(p); }
+inline std::uint32_t u32(const std::byte* p) { return be<std::uint32_t>(p); }
+inline std::uint64_t u64(const std::byte* p) { return be<std::uint64_t>(p); }
 
 inline std::uint64_t u48(const std::byte* p) {
     std::uint64_t v = 0;
