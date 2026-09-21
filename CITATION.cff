@@ -1,0 +1,18 @@
+cff-version: 1.2.0
+title: itch-book
+message: If you use this software, please cite it as below.
+type: software
+authors:
+  - alias: groovg
+repository-code: "https://github.com/groovg/itch-book"
+abstract: >-
+  NASDAQ TotalView-ITCH 5.0 feed handler and limit order book reconstruction.
+  A header-only C++23 core and a Python package that turns raw ITCH day files
+  into BBO, trades, order-by-order and depth tables.
+keywords:
+  - itch
+  - nasdaq
+  - order-book
+  - market-data
+  - cpp23
+license: MIT
